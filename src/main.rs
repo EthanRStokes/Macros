@@ -4,22 +4,24 @@
 //! Application API example
 
 mod macros;
+mod util;
 
-use std::process::Command;
 use crate::macros::{Instruction, Macro};
+use crate::util::{get_macro, run_macro};
+use crate::NavMenuAction::SelectMacro;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use cosmic::iced::widget::column;
 use cosmic::iced_core::Size;
+use cosmic::iced_widget::row;
 use cosmic::widget::nav_bar;
 use cosmic::{executor, iced, ApplicationExt, Element};
-use enigo::{Axis, Coordinate, Direction, Enigo, Key, Keyboard, Mouse};
+use enigo::agent::Token;
+use enigo::{Axis, Coordinate, Direction, Enigo, Key};
+use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::{sleep, JoinHandle};
-use cosmic::iced_widget::row;
-use enigo::agent::Token;
-use tracing::warn;
+use std::thread::JoinHandle;
 
 #[derive(Clone, Copy)]
 pub enum Page {
@@ -64,13 +66,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Messages that are used specifically by our [`App`].
 #[derive(Clone, Debug)]
-pub enum Message {
+pub(crate) enum Message {
     Input1(String),
     Input2(String),
     Ignore,
     ToggleHide,
-    SelectMacro(usize),
+    NavMenuAction(NavMenuAction),
     RunMacro(Option<usize>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NavMenuAction {
+    SelectMacro(usize),
+    RunMacro,
+    AddInstruction(Instruction),
+    RemoveInstruction(usize),
+    ClearInstructions,
+    SaveMacro,
 }
 
 /// The [`App`] stores application-specific state.
@@ -81,10 +93,20 @@ struct App {
     input_2: String,
     hidden: bool,
     macro_selected: Option<usize>,
+    current_macro: Option<Macro>,
     config: Config,
     enigo: Arc<Mutex<Enigo>>,
     thread_pool: ThreadPool,
     macros: Option<Vec<String>>,
+}
+
+impl App {
+    fn update_macro(&mut self, selected: Option<usize>) {
+        self.macro_selected = selected;
+        if let Some(selected) = selected {
+            self.current_macro = Some(get_macro(&self.config, selected));
+        }
+    }
 }
 
 fn make_enigo() -> Enigo {
@@ -152,6 +174,7 @@ impl cosmic::Application for App {
             input_2: String::new(),
             hidden: true,
             macro_selected: Some(0),
+            current_macro: None,
             config: Config::new(Self::APP_ID, 1).unwrap(),
             enigo: Arc::new(Mutex::from(make_enigo())),
             thread_pool: ThreadPool::new(),
@@ -224,8 +247,44 @@ impl cosmic::Application for App {
             Message::ToggleHide => {
                 self.hidden = !self.hidden;
             }
-            Message::SelectMacro(mac) => {
-                self.macro_selected = Some(mac);
+            Message::NavMenuAction(message) => match message {
+                SelectMacro(selected) => {
+                    self.update_macro(Some(selected));
+                }
+                NavMenuAction::RunMacro => {
+                    if let Some(mac) = self.current_macro.clone() {
+                        run_macro(mac.clone(), &mut *self.enigo.lock().unwrap());
+                    }
+                }
+                NavMenuAction::AddInstruction(instruction) => {
+                    if let Some(mut mac) = self.current_macro.clone() {
+                        mac.code.push(instruction);
+                        self.current_macro = Some(mac);
+                    }
+                }
+                NavMenuAction::RemoveInstruction(index) => {
+                    if let Some(mut mac) = self.current_macro.clone() {
+                        if (mac.code.len()) > 0 {
+                            mac.code.remove(index);
+                            self.current_macro = Some(mac);
+                        }
+                    }
+                }
+                NavMenuAction::ClearInstructions => {
+                    if let Some(mut mac) = self.current_macro.clone() {
+                        mac.code.clear();
+                        self.current_macro = Some(mac);
+                    }
+                }
+                NavMenuAction::SaveMacro => {
+                    if let Some(selected) = self.macro_selected {
+                        if let Some(mac) = self.current_macro.clone() {
+                            let mut macros = self.config.get::<Vec<Macro>>("macros").expect("TODO: panic message");
+                            macros[selected] = mac;
+                            self.config.set("macros", macros).expect("TODO: panic message");
+                        }
+                    }
+                }
             }
             Message::RunMacro(selected) => {
                 if selected.is_none() {
@@ -238,51 +297,9 @@ impl cosmic::Application for App {
                 let config = self.config.clone();
                 let thread = thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
                     println!("Running macro...");
-                    let macs = config.get::<Vec<Macro>>("macros").expect("TODO: panic message");
-                    let mac = &macs[selected];
+                    let mac = get_macro(&config, selected);
                     let mut enigo = enigo.lock().unwrap();
-                    for ins in &mac.code {
-                        #[allow(unreachable_patterns)] match ins {
-                            Instruction::Wait(duration) => {
-                                sleep(std::time::Duration::from_millis(*duration));
-                            }
-                            Instruction::Script(script) => {
-                                println!("Running script: {}", script);
-                                Command::new("bash")
-                                    .arg(script)
-                                    .output()
-                                    .expect("TODO: panic message");
-                            }
-                            Instruction::Token(token) => {
-                                match token {
-                                    Token::Text(text) => {
-                                        enigo.text(&text).expect("TODO: panic message");
-                                    }
-                                    Token::Key(key, direction) => {
-                                        enigo.key(*key, *direction).expect("TODO: panic message");
-                                    }
-                                    Token::Raw(keycode, direction) => {
-                                        enigo.raw(*keycode, *direction).expect("TODO: panic message");
-                                    }
-                                    Token::Button(button, direction) => {
-                                        enigo.button(*button, *direction).expect("TODO: panic message");
-                                    }
-                                    Token::MoveMouse(x, y, coord) => {
-                                        enigo.move_mouse(*x, *y, *coord).expect("TODO: panic message");
-                                    }
-                                    Token::Scroll(amount, axis) => {
-                                        enigo.scroll(*amount, *axis).expect("TODO: panic message");
-                                    }
-                                    _ => {
-                                        warn!("Token not implemented.");
-                                    }
-                                }
-                            }
-                            _ => {
-                                println!("Instruction not implemented.");
-                            }
-                        }
-                    }
+                    run_macro(mac, enigo.deref_mut());
                     println!("Macro complete.");
                 }).expect("TODO: panic message");
                 pool.add_worker(thread);
@@ -324,11 +341,28 @@ impl cosmic::Application for App {
         //content = content.push(cosmic::widget::calendar::calendar(now, |date| Message::Input2(format!("Selected date: {}", date))));
         if let Some(macs) = &self.macros {
             content = content.push(row![
-                cosmic::widget::dropdown(macs, Some(0), Message::SelectMacro),
+                cosmic::widget::dropdown(macs, Some(0), |x: usize| Message::NavMenuAction(SelectMacro(x))),
 
             cosmic::widget::button::text("Run macro")
                 .on_press(Message::RunMacro(self.macro_selected.clone()))
             ]);
+        }
+
+        if let Some(mac) = &self.current_macro {
+            // TODO: make actual buttons with arguments
+            content = content.push(row![
+                cosmic::widget::button::text("Add wait")
+                    .on_press(Message::NavMenuAction(NavMenuAction::AddInstruction(Instruction::Wait(1000)))),
+                cosmic::widget::button::text("Add text")
+                    .on_press(Message::NavMenuAction(NavMenuAction::AddInstruction(Instruction::Token(Token::Text("text".into()))))),
+                cosmic::widget::button::text("Remove instruction")
+                    .on_press(Message::NavMenuAction(NavMenuAction::RemoveInstruction(mac.code.len() - 1))),
+                cosmic::widget::button::text("Clear instructions")
+                    .on_press(Message::NavMenuAction(NavMenuAction::ClearInstructions)),
+                cosmic::widget::button::text("Run macro")
+                    .on_press(Message::NavMenuAction(NavMenuAction::RunMacro)),
+            ]);
+            content = content.push(cosmic::widget::button::text("Save macro").on_press(Message::NavMenuAction(NavMenuAction::SaveMacro)));
         }
 
         let centered = cosmic::widget::container(content)
