@@ -80,7 +80,7 @@ pub(crate) enum NavMenuAction {
     SelectMacro(usize),
     RunMacro,
     AddInstruction(Instruction),
-    RemoveInstruction(usize),
+    RemoveInstruction(isize),
     ClearInstructions,
     SaveMacro,
 }
@@ -264,8 +264,8 @@ impl cosmic::Application for App {
                 }
                 NavMenuAction::RemoveInstruction(index) => {
                     if let Some(mut mac) = self.current_macro.clone() {
-                        if (mac.code.len()) > 0 {
-                            mac.code.remove(index);
+                        if mac.code.len() > 0 && index >= 0 {
+                            mac.code.remove(index as usize);
                             self.current_macro = Some(mac);
                         }
                     }
@@ -356,7 +356,7 @@ impl cosmic::Application for App {
                 cosmic::widget::button::text("Add text")
                     .on_press(Message::NavMenuAction(NavMenuAction::AddInstruction(Instruction::Token(Token::Text("text".into()))))),
                 cosmic::widget::button::text("Remove instruction")
-                    .on_press(Message::NavMenuAction(NavMenuAction::RemoveInstruction(mac.code.len() - 1))),
+                    .on_press(Message::NavMenuAction(NavMenuAction::RemoveInstruction(mac.code.len() as isize - 1))),
                 cosmic::widget::button::text("Clear instructions")
                     .on_press(Message::NavMenuAction(NavMenuAction::ClearInstructions)),
                 cosmic::widget::button::text("Run macro")
