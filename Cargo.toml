@@ -13,6 +13,8 @@ enigo = { version = "0.3.0", features = ["serde"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
+rev = "a6db807"
+version = "0.1.0"
 default-features = false
 features = [
     "debug",

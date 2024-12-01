@@ -18,4 +18,5 @@ impl Macro {
 pub(crate) enum Instruction {
     Token(Token),
     Wait(u64),
+    Script(String)
 }

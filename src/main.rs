@@ -5,6 +5,7 @@
 
 mod macros;
 
+use std::process::Command;
 use crate::macros::{Instruction, Macro};
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
@@ -244,6 +245,13 @@ impl cosmic::Application for App {
                         #[allow(unreachable_patterns)] match ins {
                             Instruction::Wait(duration) => {
                                 sleep(std::time::Duration::from_millis(*duration));
+                            }
+                            Instruction::Script(script) => {
+                                println!("Running script: {}", script);
+                                Command::new("bash")
+                                    .arg(script)
+                                    .output()
+                                    .expect("TODO: panic message");
                             }
                             Instruction::Token(token) => {
                                 match token {
