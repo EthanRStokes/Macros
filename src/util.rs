@@ -55,3 +55,7 @@ pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {
         }
     }
 }
+
+pub fn make_enigo() -> Enigo {
+    Enigo::new(&enigo::Settings::default()).unwrap()
+}
