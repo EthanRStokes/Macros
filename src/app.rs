@@ -1,18 +1,19 @@
-use cosmic::{executor, ApplicationExt, Element};
-use cosmic::app::{Core, Task};
-use cosmic::widget::nav_bar;
-use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
-use std::sync::{Arc, Mutex};
-use enigo::agent::Token;
-use enigo::{Axis, Coordinate, Direction, Enigo, Key};
-use std::thread;
-use cosmic::iced_widget::{column, row};
-use std::ops::DerefMut;
-use cosmic::iced::{Alignment, Length};
 use crate::app::NavMenuAction::SelectMacro;
 use crate::macros::{Instruction, Macro};
-use crate::ThreadPool;
+use crate::util::ThreadPool;
 use crate::util::{get_macro, run_macro};
+use cosmic::app::{Core, Task};
+use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
+use cosmic::iced::{Alignment, Length};
+use cosmic::iced_widget::{column, row};
+use cosmic::widget::button::text;
+use cosmic::widget::nav_bar;
+use cosmic::{executor, ApplicationExt, Element};
+use enigo::agent::Token;
+use enigo::{Axis, Coordinate, Direction, Enigo, Key};
+use std::ops::DerefMut;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Page {
@@ -23,6 +24,7 @@ pub(crate) enum Page {
 }
 
 impl Page {
+    /// Page titles
     const fn as_str(self) -> &'static str {
         match self {
             Page::Page1 => "Macros",
@@ -36,10 +38,6 @@ impl Page {
 /// Messages that are used specifically by our [`App`].
 #[derive(Clone, Debug)]
 pub(crate) enum Message {
-    Input1(String),
-    Input2(String),
-    Ignore,
-    ToggleHide,
     NavMenuAction(NavMenuAction),
     RunMacro(Option<usize>),
 }
@@ -56,14 +54,14 @@ pub(crate) enum NavMenuAction {
 
 /// The [`App`] stores application-specific state.
 pub(crate) struct App {
+    /// COSMIC app settings
     core: Core,
     nav_model: nav_bar::Model,
-    input_1: String,
-    input_2: String,
-    hidden: bool,
     macro_selected: Option<usize>,
     current_macro: Option<Macro>,
+    /// The application config
     config: Config,
+    /// Enigo is an API for mouse and keyboard control
     enigo: Arc<Mutex<Enigo>>,
     thread_pool: ThreadPool,
     macros: Option<Vec<String>>,
@@ -113,9 +111,6 @@ impl cosmic::Application for App {
         let mut app = App {
             core,
             nav_model,
-            input_1: String::new(),
-            input_2: String::new(),
-            hidden: true,
             macro_selected: None,
             current_macro: None,
             config: Config::new(Self::APP_ID, 1).unwrap(),
@@ -127,6 +122,8 @@ impl cosmic::Application for App {
         let config = &app.config;
         let tx = config.transaction();
         let mut macros = config.get::<Vec<Macro>>("macros");
+
+        // Add default config. Everything here is temporary until a later state of the project.
         if macros.is_err() {
             tx.set("macros", vec![
                 Macro::new("macro".into(), "description".into(), vec![
@@ -139,17 +136,17 @@ impl cosmic::Application for App {
                     Instruction::Wait(1000),
                     Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Press)),
                     Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Release)),
-                    Instruction::Token(Token::Text("Skibidi toilet ohio rizz".into())),
+                    Instruction::Token(Token::Text("All of this text just got pasted".into())),
                     Instruction::Wait(500),
                     Instruction::Token(Token::Scroll(4, Axis::Vertical)),
                 ]),
                 Macro::new("macro2".into(), "description".into(), vec![
                     Instruction::Wait(1000),
-                    Instruction::Token(Token::Text("NJOPFPDSFSODPFJODSIFJOPSDPFJ THIS IS FROM A MACRO".into())),
+                    Instruction::Token(Token::Text("NJOPFPDSFSODPFJODSIFJOPSDPFJ SPAM".into())),
                     Instruction::Wait(500),
                     Instruction::Token(Token::Scroll(4, Axis::Vertical)),
                 ]),
-                Macro::new("skibidi".into(), "awesome macro".into(), vec![
+                Macro::new("rustrustrust".into(), "awesome macro".into(), vec![
                     Instruction::Wait(1000),
                     Instruction::Token(Token::Text("Skibidi Skibidi Skibidi Skibidi Skibidi Skibidi Skibidi".into())),
                 ]),
@@ -180,16 +177,6 @@ impl cosmic::Application for App {
     /// Handle application events here.
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
-            Message::Input1(v) => {
-                self.input_1 = v;
-            }
-            Message::Input2(v) => {
-                self.input_2 = v;
-            }
-            Message::Ignore => {}
-            Message::ToggleHide => {
-                self.hidden = !self.hidden;
-            }
             Message::NavMenuAction(message) => match message {
                 SelectMacro(selected) => {
                     self.update_macro(Some(selected));
@@ -222,9 +209,9 @@ impl cosmic::Application for App {
                 NavMenuAction::SaveMacro => {
                     if let Some(selected) = self.macro_selected {
                         if let Some(mac) = self.current_macro.clone() {
-                            let mut macros = self.config.get::<Vec<Macro>>("macros").expect("TODO: panic message");
+                            let mut macros = self.config.get::<Vec<Macro>>("macros").expect("Macros config missing?");
                             macros[selected] = mac;
-                            self.config.set("macros", macros).expect("TODO: panic message");
+                            self.config.set("macros", macros).expect("Couldn't set macros config?");
                         }
                     }
                 }
@@ -238,13 +225,16 @@ impl cosmic::Application for App {
                 let thread_num = pool.workers.len();
                 let enigo = (&self.enigo).clone();
                 let config = self.config.clone();
+
                 let thread = thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
                     println!("Running macro...");
                     let mac = get_macro(&config, selected);
                     let mut enigo = enigo.lock().unwrap();
                     run_macro(mac, enigo.deref_mut());
                     println!("Macro complete.");
-                }).expect("TODO: panic message");
+                }).expect("Macro thread failed to spawn");
+
+                // TODO: remove from the pool once the thread has completed.
                 pool.add_worker(thread);
             }
         }
@@ -253,63 +243,47 @@ impl cosmic::Application for App {
 
     /// Creates a view after each update.
     fn view(&self) -> Element<Self::Message> {
+        // The string associated with the page. Ex: "Manage macro"
         let page_content = self
             .nav_model
             .active_data::<String>()
             .map_or("No page selected", String::as_str);
 
-        let text = cosmic::widget::text(page_content);
+        let page_text = cosmic::widget::text(page_content);
 
         let mut content = column![
-                text,
-                cosmic::widget::text_input::text_input("", &self.input_1)
-                    .on_input(Message::Input1)
-                    .on_clear(Message::Ignore),
-                cosmic::widget::text_input::secure_input(
-                    "",
-                    &self.input_1,
-                    Some(Message::ToggleHide),
-                    self.hidden
-                )
-                .on_input(Message::Input1),
-                cosmic::widget::text_input::text_input("", &self.input_1).on_input(Message::Input1),
-                cosmic::widget::text_input::search_input("", &self.input_2)
-                    .on_input(Message::Input2)
-                    .on_clear(Message::Ignore),
-            ]
-                .width(Length::Fill)
-                .height(Length::Shrink)
-                .align_x(Alignment::Center);
+            page_text
+        ];
 
-        //content = content.push(cosmic::widget::calendar::calendar(now, |date| Message::Input2(format!("Selected date: {}", date))));
         if let Some(macs) = &self.macros {
             content = content.push(row![
                 column![
                     cosmic::widget::text("Select macro"),
                     cosmic::widget::dropdown(macs, self.macro_selected, |x: usize| Message::NavMenuAction(SelectMacro(x)))
                 ],
-                cosmic::widget::button::text("Run macro")
+                text("Run macro")
                     .on_press(Message::RunMacro(self.macro_selected.clone()))
             ]);
         }
 
         if let Some(mac) = &self.current_macro {
-            // TODO: make actual buttons with arguments
+            // TODO: make actual buttons with arguments. Thinking fancy boxes with lines, like a flowchart
             content = content.push(row![
-                cosmic::widget::button::text("Add wait")
+                text("Add wait")
                     .on_press(Message::NavMenuAction(NavMenuAction::AddInstruction(Instruction::Wait(1000)))),
-                cosmic::widget::button::text("Add text")
+                text("Add text")
                     .on_press(Message::NavMenuAction(NavMenuAction::AddInstruction(Instruction::Token(Token::Text("text".into()))))),
-                cosmic::widget::button::text("Remove instruction")
+                text("Remove instruction")
                     .on_press(Message::NavMenuAction(NavMenuAction::RemoveInstruction(mac.code.len() as isize - 1))),
-                cosmic::widget::button::text("Clear instructions")
+                text("Clear instructions")
                     .on_press(Message::NavMenuAction(NavMenuAction::ClearInstructions)),
-                cosmic::widget::button::text("Run macro")
+                text("Run macro")
                     .on_press(Message::NavMenuAction(NavMenuAction::RunMacro)),
             ]);
-            content = content.push(cosmic::widget::button::text("Save macro").on_press(Message::NavMenuAction(NavMenuAction::SaveMacro)));
+            content = content.push(text("Save macro").on_press(Message::NavMenuAction(NavMenuAction::SaveMacro)));
         }
 
+        // Centers all the content and makes it look nice
         let centered = cosmic::widget::container(content)
             .width(Length::Fill)
             .height(Length::Shrink)
@@ -320,10 +294,7 @@ impl cosmic::Application for App {
     }
 }
 
-impl App
-where
-    Self: cosmic::Application,
-{
+impl App where Self: cosmic::Application, {
     fn active_page_title(&mut self) -> &str {
         self.nav_model
             .text(self.nav_model.active())

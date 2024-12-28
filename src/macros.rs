@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub(crate) struct Macro {
     pub(crate) name: String, /// displayed in GUI
-    pub(crate) description: String, /// displayed in GUI
+    pub(crate) description: String, /// displayed in GUI, TODO: add the description display
     pub(crate) code: Vec<Instruction>,
 }
 

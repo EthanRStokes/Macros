@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::thread::sleep;
+use std::thread::{sleep, JoinHandle};
 use cosmic::cosmic_config::{Config, ConfigGet};
 use enigo::agent::Token;
 use enigo::{Enigo, Keyboard, Mouse};
@@ -58,4 +58,26 @@ pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {
 
 pub fn make_enigo() -> Enigo {
     Enigo::new(&enigo::Settings::default()).unwrap()
+}
+
+pub(crate) struct ThreadPool {
+    pub(crate) workers: Vec<JoinHandle<()>>,
+}
+
+impl ThreadPool {
+    pub(crate) fn new() -> Self {
+        ThreadPool { workers: Vec::new() }
+    }
+
+    pub(crate) fn add_worker(&mut self, worker: JoinHandle<()>) {
+        self.workers.push(worker);
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for worker in self.workers.drain(..) {
+            worker.join().expect("TODO: panic message");
+        }
+    }
 }
