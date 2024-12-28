@@ -148,7 +148,7 @@ impl cosmic::Application for App {
                 ]),
                 Macro::new("rustrustrust".into(), "awesome macro".into(), vec![
                     Instruction::Wait(1000),
-                    Instruction::Token(Token::Text("Skibidi Skibidi Skibidi Skibidi Skibidi Skibidi Skibidi".into())),
+                    Instruction::Token(Token::Text("Rust Rust Rust Rust Rust".into())),
                 ]),
             ]).expect("TODO: panic message");
             macros = config.get::<Vec<Macro>>("macros");
