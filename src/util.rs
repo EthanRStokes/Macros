@@ -77,7 +77,7 @@ impl ThreadPool {
 impl Drop for ThreadPool {
     fn drop(&mut self) {
         for worker in self.workers.drain(..) {
-            worker.join().expect("TODO: panic message");
+            worker.join().expect("Failed to join worker thread");
         }
     }
 }

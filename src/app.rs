@@ -150,7 +150,7 @@ impl cosmic::Application for App {
                     Instruction::Wait(1000),
                     Instruction::Token(Token::Text("Rust Rust Rust Rust Rust".into())),
                 ]),
-            ]).expect("TODO: panic message");
+            ]).expect("Failed to set config option");
             macros = config.get::<Vec<Macro>>("macros");
         }
         println!("Commit transaction: {:?}", tx.commit());
