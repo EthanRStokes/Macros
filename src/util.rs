@@ -1,13 +1,13 @@
 use std::process::Command;
 use std::thread::{sleep, JoinHandle};
 use cosmic::cosmic_config::{Config, ConfigGet};
-use enigo::agent::Token;
 use enigo::{Enigo, Keyboard, Mouse};
+use enigo::agent::Token::{Button, Key, MoveMouse, Raw, Scroll, Text};
 use tracing::warn;
 use crate::macros::{Instruction, Macro};
 
 pub(crate) fn get_macro(config: &Config, mac: usize) -> Macro {
-    let macs = config.get::<Vec<Macro>>("macros").expect("TODO: panic message");
+    let macs = config.get::<Vec<Macro>>("macros").expect("Macros file not found");
     macs[mac].clone()
 }
 
@@ -18,31 +18,31 @@ pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {
                 sleep(std::time::Duration::from_millis(duration));
             }
             Instruction::Script(script) => {
-                println!("Running script: {}", script);
+                println!("Running script: {script}");
                 Command::new("bash")
-                    .arg(script)
+                    .arg(&script)
                     .output()
-                    .expect("TODO: panic message");
+                    .expect(&format!("Failed to run script: {script}"));
             }
             Instruction::Token(token) => {
                 match token {
-                    Token::Text(text) => {
-                        enigo.text(&text).expect("TODO: panic message");
+                    Text(text) => {
+                        enigo.text(&text).expect(&format!("Failed to type text: {text}"));
                     }
-                    Token::Key(key, direction) => {
-                        enigo.key(key, direction).expect("TODO: panic message");
+                    Key(key, direction) => {
+                        enigo.key(key, direction).expect("Failed to type key");
                     }
-                    Token::Raw(keycode, direction) => {
-                        enigo.raw(keycode, direction).expect("TODO: panic message");
+                    Raw(keycode, direction) => {
+                        enigo.raw(keycode, direction).expect(&format!("Failed to type raw keycode: {keycode}"));
                     }
-                    Token::Button(button, direction) => {
-                        enigo.button(button, direction).expect("TODO: panic message");
+                    Button(button, direction) => {
+                        enigo.button(button, direction).expect("Failed to click mouse button");
                     }
-                    Token::MoveMouse(x, y, coord) => {
-                        enigo.move_mouse(x, y, coord).expect("TODO: panic message");
+                    MoveMouse(x, y, coord) => {
+                        enigo.move_mouse(x, y, coord).expect(&format!("Failed to move mouse to: ({x}, {y})"));
                     }
-                    Token::Scroll(amount, axis) => {
-                        enigo.scroll(amount, axis).expect("TODO: panic message");
+                    Scroll(amount, axis) => {
+                        enigo.scroll(amount, axis).expect(&format!("Failed to scroll by: {amount}"));
                     }
                     _ => {
                         warn!("Token not implemented.");
