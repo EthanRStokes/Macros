@@ -9,10 +9,11 @@ tracing-log = "0.2.0"
 tracing-subscriber = "0.3.19"
 serde = { version = "1.0.217", features = ["derive"] }
 enigo = { version = "0.3.0", features = ["serde"] }
+slotmap = { version = "1.0.7", features = ["serde"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "b2ce4cc"
+rev = "fdfd80f"
 version = "0.1.0"
 default-features = false
 features = [
