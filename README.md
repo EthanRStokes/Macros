@@ -23,3 +23,6 @@ make
 ```bash
 sudo make install
 ```
+
+
+<small>Warning: This project contains hideous code. Prepare your eyes before an endeavour.</small>
