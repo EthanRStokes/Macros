@@ -13,7 +13,7 @@ slotmap = { version = "1.0.7", features = ["serde"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "fdfd80f"
+rev = "7d84d21"
 version = "0.1.0"
 default-features = false
 features = [
