@@ -15,13 +15,13 @@ Gentoo: `xdotool`
 ```bash
 git clone https://github.com/Treetrain1/macros.git
 cd macros
-make
+just
 ```
 
 ### Installation
 
 ```bash
-sudo make install
+sudo just install
 ```
 
 
