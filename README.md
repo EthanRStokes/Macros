@@ -1,2 +1,25 @@
 # Macros
-A libcosmic app to manage and run macros on linux.
+
+A WIP libcosmic app to manage and run macros on Linux
+
+## Building
+
+### Dependencies
+
+Debian: `libxdo-dev`\
+Arch: `xdotool`\
+Fedora: `libX11-devel libxdo-devel`\
+Gentoo: `xdotool`
+
+### Build
+```bash
+git clone https://github.com/Treetrain1/macros.git
+cd macros
+make
+```
+
+### Installation
+
+```bash
+sudo make install
+```
