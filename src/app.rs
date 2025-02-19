@@ -421,6 +421,32 @@ impl cosmic::Application for App {
                 instructions.push(instruction);
             }
 
+            let len = mac.code.len();
+            instructions.push(
+                cosmic::widget::dropdown(
+                    &[
+                        "Add wait",
+                        "Add text",
+                        "Add key press",
+                        "Add mouse button press",
+                        "Add mouse move",
+                        "Add scroll",
+                        "Add script",
+                    ],
+                    None,
+                    move |selected| match selected {
+                        0 => AddInstruction(len, Instruction::Wait(1000)),
+                        1 => AddInstruction(len, Instruction::Token(Token::Text("text".into()))),
+                        2 => AddInstruction(len, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press))),
+                        3 => AddInstruction(len, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
+                        4 => AddInstruction(len, Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel))),
+                        5 => AddInstruction(len, Instruction::Token(Token::Scroll(4, Axis::Vertical))),
+                        6 => AddInstruction(len, Instruction::Script("script".into())),
+                        _ => unreachable!(),
+                    },
+                ).into()
+            );
+
             content = content.push(widget::settings::view_column(
                 vec![
                 widget::settings::section()
