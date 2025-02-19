@@ -10,7 +10,7 @@ use cosmic::widget::button::text;
 use cosmic::widget::{container, nav_bar};
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
-use enigo::{Axis, Coordinate, Direction, Enigo, Key};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
 use std::ops::DerefMut;
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ pub(crate) enum Message {
     SelectMacro(usize),
     RunMacro,
     SetTitle(String),
-    AddInstruction(Instruction),
+    AddInstruction(usize, Instruction),
     EditInstruction(usize, Instruction),
     RemoveInstruction(isize),
     ClearInstructions,
@@ -220,9 +220,9 @@ impl cosmic::Application for App {
                     pool.add_worker(thread);
                 }
             }
-            AddInstruction(instruction) => {
+            AddInstruction(index, instruction) => {
                 if let Some(mut mac) = self.current_macro.clone() {
-                    mac.code.push(instruction);
+                    mac.code.insert(index, instruction);
                     self.current_macro = Some(mac);
                 }
             }
@@ -294,9 +294,9 @@ impl cosmic::Application for App {
             // TODO: make actual buttons with arguments. Thinking fancy boxes with lines, like a flowchart
             content = content.push(column![
                 text("Add wait")
-                    .on_press(AddInstruction(Instruction::Wait(1000))),
+                    .on_press(AddInstruction(mac.code.len(), Instruction::Wait(1000))),
                 text("Add text")
-                    .on_press(AddInstruction(Instruction::Token(Token::Text("text".into())))),
+                    .on_press(AddInstruction(mac.code.len(), Instruction::Token(Token::Text("text".into())))),
                 text("Remove instruction")
                     .on_press(RemoveInstruction(mac.code.len() as isize - 1)),
                 text("Clear instructions")
@@ -308,7 +308,7 @@ impl cosmic::Application for App {
             let mut instructions: Vec<Element<Message>> = vec![];
 
             for (index, ins) in mac.code.iter().enumerate() {
-                let instruction = match ins {
+                let instruction: Element<Message> = match ins {
                     Instruction::Token(token) => {
                         match token {
                             Token::Text(text) => {
@@ -392,6 +392,31 @@ impl cosmic::Application for App {
                         //widget::text::body(format!("Script: {}", script)).into()
                     }
                 };
+                let instruction = row![
+                    instruction,
+                    cosmic::widget::dropdown(
+                        &[
+                            "Add wait",
+                            "Add text",
+                            "Add key press",
+                            "Add mouse button press",
+                            "Add mouse move",
+                            "Add scroll",
+                            "Add script",
+                        ],
+                        None,
+                        move |selected| match selected {
+                            0 => AddInstruction(index, Instruction::Wait(1000)),
+                            1 => AddInstruction(index, Instruction::Token(Token::Text("text".into()))),
+                            2 => AddInstruction(index, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press))),
+                            3 => AddInstruction(index, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
+                            4 => AddInstruction(index, Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel))),
+                            5 => AddInstruction(index, Instruction::Token(Token::Scroll(4, Axis::Vertical))),
+                            6 => AddInstruction(index, Instruction::Script("script".into())),
+                            _ => unreachable!(),
+                        },
+                    )
+                ].into();
 
                 instructions.push(instruction);
             }
