@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Macros
+Comment=Create and manage macros
+Exec=macros
+Terminal=false
+Type=Application
+Icon=face-smirk
+Categories=COSMIC;Utility;
+Keywords=Macro;Manager;
