@@ -291,7 +291,6 @@ impl cosmic::Application for App {
         ].spacing(50).padding([0, 0, 0, 0]));
 
         if let Some(mac) = &self.current_macro.as_ref() {
-            // TODO: make actual buttons with arguments. Thinking fancy boxes with lines, like a flowchart
             content = content.push(column![
                 text("Clear instructions")
                     .on_press(ClearInstructions),
