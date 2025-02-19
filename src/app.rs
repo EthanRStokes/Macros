@@ -293,12 +293,6 @@ impl cosmic::Application for App {
         if let Some(mac) = &self.current_macro.as_ref() {
             // TODO: make actual buttons with arguments. Thinking fancy boxes with lines, like a flowchart
             content = content.push(column![
-                text("Add wait")
-                    .on_press(AddInstruction(mac.code.len(), Instruction::Wait(1000))),
-                text("Add text")
-                    .on_press(AddInstruction(mac.code.len(), Instruction::Token(Token::Text("text".into())))),
-                text("Remove instruction")
-                    .on_press(RemoveInstruction(mac.code.len() as isize - 1)),
                 text("Clear instructions")
                     .on_press(ClearInstructions),
                 text("Save macro")
