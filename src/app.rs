@@ -290,7 +290,7 @@ impl cosmic::Application for App {
             )
         ].spacing(50).padding([0, 0, 0, 0]));
 
-        if let Some(mac) = &self.current_macro.as_ref() {
+        if let Some(mac) = &self.current_macro {
             content = content.push(column![
                 text("Clear instructions")
                     .on_press(ClearInstructions),
@@ -300,7 +300,7 @@ impl cosmic::Application for App {
 
             let mut instructions: Vec<Element<Message>> = vec![];
 
-            for (index, ins) in mac.code.iter().enumerate() {
+            for (index, ins) in mac.code.iter().cloned().enumerate() {
                 let instruction: Element<Message> = match ins {
                     Instruction::Token(token) => {
                         match token {
@@ -316,8 +316,8 @@ impl cosmic::Application for App {
                             Token::Key(key, direction) => {
                                 row![
                                     widget::text::body("Key:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("", key_to_string(key).unwrap_or_default())
-                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Key(string_to_key(x.as_str()).unwrap_or(*key), direction.clone())))),
+                                    widget::text_input("", key_to_string(&key).unwrap_or_default())
+                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Key(string_to_key(x.as_str()).unwrap_or(key), direction.clone())))),
                                     widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                         .on_press(RemoveInstruction(index as isize))
                                 ].spacing(10).into()
@@ -326,12 +326,12 @@ impl cosmic::Application for App {
                                 widget::text::body(format!("Raw: {:?}", keycode)).into()
                             }
                             Token::Button(button, direction) => {
-                                let button_str = button_to_string(button).unwrap_or_default();
+                                let button_str = button_to_string(&button).unwrap_or_default();
                                 row![
                                     widget::text::body("Button:".to_string()).align_y(Alignment::Center),
                                     widget::text_input("", button_str)
-                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Button(string_to_button(x.as_str()).unwrap_or(*button), direction.clone())))),
-                                    widget::dropdown(&["Click", "Press", "Release"], Some(if *direction == Direction::Click { 0usize } else if *direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(*button, if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release })))),
+                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Button(string_to_button(x.as_str()).unwrap_or(button), direction.clone())))),
+                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(button, if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release })))),
                                     widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                         .on_press(RemoveInstruction(index as isize))
                                 ].spacing(10).into()
@@ -341,10 +341,10 @@ impl cosmic::Application for App {
                                 row![
                                     widget::text::body("Move mouse:".to_string()).align_y(Alignment::Center),
                                     widget::text_input("X", format!("{}", x))
-                                        .on_input(move |new_x| EditInstruction(index, Instruction::Token(Token::MoveMouse(new_x.parse().unwrap_or(*x), *y, coordinate.clone())))),
+                                        .on_input(move |new_x| EditInstruction(index, Instruction::Token(Token::MoveMouse(new_x.parse().unwrap_or(x), y, coordinate.clone())))),
                                     widget::text_input("Y", format!("{}", y))
-                                        .on_input(move |new_y| EditInstruction(index, Instruction::Token(Token::MoveMouse(*x, new_y.parse().unwrap_or(*y), coordinate.clone())))),
-                                    widget::dropdown(&["Absolute", "Relative"], Some(if *coordinate == Coordinate::Abs { 0usize } else { 1usize }), move |coord: usize| EditInstruction(index, Instruction::Token(Token::MoveMouse(*x, *y, if coord == 0 { Coordinate::Abs } else { Coordinate::Rel })))),
+                                        .on_input(move |new_y| EditInstruction(index, Instruction::Token(Token::MoveMouse(x, new_y.parse().unwrap_or(y), coordinate.clone())))),
+                                    widget::dropdown(&["Absolute", "Relative"], Some(if coordinate == Coordinate::Abs { 0usize } else { 1usize }), move |coord: usize| EditInstruction(index, Instruction::Token(Token::MoveMouse(x, y, if coord == 0 { Coordinate::Abs } else { Coordinate::Rel })))),
                                     widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                         .on_press(RemoveInstruction(index as isize))
                                 ].spacing(10).into()
@@ -353,8 +353,8 @@ impl cosmic::Application for App {
                                 row![
                                     widget::text::body("Scroll:".to_string()).align_y(Alignment::Center),
                                     widget::text_input("Amount", format!("{}", amount))
-                                        .on_input(move |new_amount| EditInstruction(index, Instruction::Token(Token::Scroll(new_amount.parse().unwrap_or(*amount), axis.clone())))),
-                                    widget::dropdown(&["Vertical", "Horizontal"], Some(if *axis == Axis::Vertical { 0 } else { 1 }), move |new_axis: usize| EditInstruction(index, Instruction::Token(Token::Scroll(*amount, if new_axis == 0 { Axis::Vertical } else { Axis::Horizontal })))),
+                                        .on_input(move |new_amount| EditInstruction(index, Instruction::Token(Token::Scroll(new_amount.parse().unwrap_or(amount), axis.clone())))),
+                                    widget::dropdown(&["Vertical", "Horizontal"], Some(if axis == Axis::Vertical { 0 } else { 1 }), move |new_axis: usize| EditInstruction(index, Instruction::Token(Token::Scroll(amount, if new_axis == 0 { Axis::Vertical } else { Axis::Horizontal })))),
                                     widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                         .on_press(RemoveInstruction(index as isize))
                                 ].spacing(10).into()
@@ -368,7 +368,7 @@ impl cosmic::Application for App {
                         row![
                             widget::text::body("Wait:".to_string()).align_y(Alignment::Center),
                             widget::text_input("", duration.to_string())
-                                .on_input(move |x| EditInstruction(index, Instruction::Wait(x.parse().unwrap_or(*duration)))),
+                                .on_input(move |x| EditInstruction(index, Instruction::Wait(x.parse().unwrap_or(duration)))),
                             widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                 .on_press(RemoveInstruction(index as isize))
                         ].spacing(10).into()
