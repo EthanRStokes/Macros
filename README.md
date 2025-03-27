@@ -21,6 +21,7 @@ just
 ### Installation
 
 ```bash
+just
 sudo just install
 ```
 
