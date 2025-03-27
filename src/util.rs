@@ -1,16 +1,32 @@
 use std::process::Command;
 use std::thread::{sleep, JoinHandle};
-use cosmic::cosmic_config::{Config, ConfigGet};
+use cosmic::Application;
+use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use enigo::{Enigo, Keyboard, Mouse};
 use enigo::agent::Token::{Button, Key, MoveMouse, Raw, Scroll, Text};
 use enigo::Key as EnigoKey;
 use enigo::Button as EnigoButton;
 use tracing::warn;
+use crate::app::App;
 use crate::macros::{Instruction, Macro};
 
 pub(crate) fn get_macro(config: &Config, mac: usize) -> Macro {
     let macs = config.get::<Vec<Macro>>("macros").expect("Macros file not found");
     macs[mac].clone()
+}
+
+pub(crate) fn add_macro(config: &Config, mac: Macro) {
+    let tx = config.transaction();
+    let mut macros = config.get::<Vec<Macro>>("macros");
+
+    if (macros.is_err()) {
+        tx.set("macros", vec![mac]);
+    } else {
+        macros.as_mut().unwrap().push(mac);
+        tx.set("macros", macros.unwrap()).expect("Error unwrapping macro");
+    }
+
+    println!("Commit transaction: {:?}", tx.commit());
 }
 
 pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {

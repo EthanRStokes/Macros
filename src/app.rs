@@ -1,6 +1,6 @@
 use crate::app::Message::*;
 use crate::macros::{Instruction, Macro};
-use crate::util::{button_to_string, key_to_string, string_to_button, string_to_key, ThreadPool};
+use crate::util::{add_macro, button_to_string, key_to_string, string_to_button, string_to_key, ThreadPool};
 use crate::util::{get_macro, run_macro};
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
@@ -48,6 +48,8 @@ pub(crate) enum Message {
     RemoveInstruction(isize),
     ClearInstructions,
     SaveMacro,
+    NewMacro,
+    RemoveMacro,
 }
 
 /// The [`App`] stores application-specific state.
@@ -58,7 +60,7 @@ pub(crate) struct App {
     macro_selected: Option<usize>,
     current_macro: Option<Macro>,
     /// The application config
-    config: Config,
+    pub(crate) config: Config,
     /// Enigo is an API for mouse and keyboard control
     enigo: Arc<Mutex<Enigo>>,
     thread_pool: ThreadPool,
@@ -75,14 +77,45 @@ impl App {
         }
     }
 
-    /*fn update_macros(&mut self) {
+    fn update_macros(&mut self) {
         let macs = self.config.get::<Vec<Macro>>("macros").expect("Macros file not found");
-        let bruh = self.macro_keys;
-        for (key, _) in bruh.iter().for_each() {
-            bruh.insert(key, self.macros.get(key).unwrap().name.clone());
+        self.macros.clear();
+        self.macro_keys.clear();
+        self.macro_strs.clear();
+        for mac in macs {
+            let key = self.macros.insert(mac);
+            let mac = self.macros.get_mut(key).unwrap();
+            self.macro_keys.insert(key, mac.name.clone());
+            self.macro_strs.push(mac.name.clone());
         }
-        self.macro_strs = macs.iter().map(|x| x.name.clone()).collect();
-    }*/
+    }
+}
+
+fn add_default_config(config: &Config) {
+    add_macro(config, Macro::new("macro".into(), "description".into(), vec![
+        Instruction::Wait(1000),
+        Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel)),
+        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
+        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
+        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
+        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
+        Instruction::Wait(1000),
+        Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Press)),
+        Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Release)),
+        Instruction::Token(Token::Text("All of this text just got pasted".into())),
+        Instruction::Wait(500),
+        Instruction::Token(Token::Scroll(4, Axis::Vertical)),
+    ]));
+    add_macro(config, Macro::new("macro2".into(), "description".into(), vec![
+        Instruction::Wait(1000),
+        Instruction::Token(Token::Text("NJOPFPDSFSODPFJODSIFJOPSDPFJ SPAM".into())),
+        Instruction::Wait(500),
+        Instruction::Token(Token::Scroll(4, Axis::Vertical)),
+    ]));
+    add_macro(config, Macro::new("rustrustrust".into(), "awesome macro".into(), vec![
+        Instruction::Wait(1000),
+        Instruction::Token(Token::Text("Rust Rust Rust Rust Rust".into())),
+    ]));
 }
 
 /// Implement [`cosmic::Application`] to integrate with COSMIC.
@@ -131,48 +164,14 @@ impl cosmic::Application for App {
         };
 
         let config = &app.config;
-        let tx = config.transaction();
-        let mut macros = config.get::<Vec<Macro>>("macros");
+        let macros = config.get::<Vec<Macro>>("macros");
 
         // Add default config. Everything here is temporary until a later state of the project.
         if macros.is_err() {
-            tx.set("macros", vec![
-                Macro::new("macro".into(), "description".into(), vec![
-                    Instruction::Wait(1000),
-                    Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel)),
-                    Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
-                    Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
-                    Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
-                    Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
-                    Instruction::Wait(1000),
-                    Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Press)),
-                    Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Release)),
-                    Instruction::Token(Token::Text("All of this text just got pasted".into())),
-                    Instruction::Wait(500),
-                    Instruction::Token(Token::Scroll(4, Axis::Vertical)),
-                ]),
-                Macro::new("macro2".into(), "description".into(), vec![
-                    Instruction::Wait(1000),
-                    Instruction::Token(Token::Text("NJOPFPDSFSODPFJODSIFJOPSDPFJ SPAM".into())),
-                    Instruction::Wait(500),
-                    Instruction::Token(Token::Scroll(4, Axis::Vertical)),
-                ]),
-                Macro::new("rustrustrust".into(), "awesome macro".into(), vec![
-                    Instruction::Wait(1000),
-                    Instruction::Token(Token::Text("Rust Rust Rust Rust Rust".into())),
-                ]),
-            ]).expect("Failed to set config option");
-            macros = config.get::<Vec<Macro>>("macros");
+            add_default_config(config);
         }
-        println!("Commit transaction: {:?}", tx.commit());
 
-        let macros = macros.unwrap();
-        for mac in macros {
-            let bruh = app.macros.insert(mac);
-            let mac = app.macros.get_mut(bruh).unwrap();
-            app.macro_keys.insert(bruh, mac.name.clone());
-            app.macro_strs.push(mac.name.clone());
-        }
+        app.update_macros();
         //app.macros = Some(macros.iter().map(|x| x.name.clone()).collect::<Vec<String>>());
 
         let command = app.update_title();
@@ -257,6 +256,25 @@ impl cosmic::Application for App {
                     }
                 }
             }
+            NewMacro => {
+                add_macro(&self.config, Macro::new("New Macro".into(), "New Macro".into(), vec![]));
+                self.update_macros();
+                self.update_macro(Some(self.macros.len() - 1));
+            }
+            RemoveMacro => {
+                if let Some(selected) = self.macro_selected {
+                    let mut macros = self.config.get::<Vec<Macro>>("macros")
+                        .expect("Macros config missing?");
+                    if selected < macros.len() {
+                        macros.remove(selected);
+                        self.config.set("macros", macros)
+                            .expect("Couldn't set macros config?");
+                    }
+                    self.update_macros();
+                    self.current_macro = None;
+                    self.macro_selected = None;
+                }
+            }
         }
         Task::none()
     }
@@ -285,7 +303,19 @@ impl cosmic::Application for App {
             tooltip(
                 button("Run macro")
                     .on_press(RunMacro),
-                container("toilet"),
+                container("Runs the current macro"),
+                tooltip::Position::Right
+            ),
+            tooltip(
+                widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/bqm-add.svg")))
+                    .on_press(NewMacro),
+                container("Add a new macro"),
+                tooltip::Position::Right
+            ),
+            tooltip(
+                widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/bqm-remove.svg")))
+                    .on_press(RemoveMacro),
+                container("Remove the selected macro"),
                 tooltip::Position::Right
             )
         ].spacing(50).padding([0, 0, 0, 0]));
