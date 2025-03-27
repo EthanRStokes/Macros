@@ -318,6 +318,7 @@ impl cosmic::Application for App {
                                     widget::text::body("Key:".to_string()).align_y(Alignment::Center),
                                     widget::text_input("", key_to_string(&key).unwrap_or_default())
                                         .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Key(string_to_key(x.as_str()).unwrap_or(key), direction.clone())))),
+                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Key(key, if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release })))),
                                     widget::button::icon(widget::icon::from_path(PathBuf::from("/usr/share/icons/breeze/actions/16/albumfolder-user-trash.svg")))
                                         .on_press(RemoveInstruction(index as isize))
                                 ].spacing(10).into()
