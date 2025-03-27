@@ -420,13 +420,13 @@ impl cosmic::Application for App {
                     instruction,
                     cosmic::widget::dropdown(
                         &[
-                            "Add wait",
-                            "Add text",
-                            "Add key press",
-                            "Add mouse button press",
-                            "Add mouse move",
-                            "Add scroll",
-                            "Add script",
+                            "Wait",
+                            "Text",
+                            "Key",
+                            "Mouse Button",
+                            "Move Move",
+                            "Scroll",
+                            "Run Script",
                         ],
                         None,
                         move |selected| match selected {
@@ -449,13 +449,13 @@ impl cosmic::Application for App {
             instructions.push(
                 cosmic::widget::dropdown(
                     &[
-                        "Add wait",
-                        "Add text",
-                        "Add key press",
-                        "Add mouse button press",
-                        "Add mouse move",
-                        "Add scroll",
-                        "Add script",
+                        "Wait",
+                        "Text",
+                        "Key",
+                        "Mouse Button",
+                        "Move Move",
+                        "Scroll",
+                        "Run Script",
                     ],
                     None,
                     move |selected| match selected {
