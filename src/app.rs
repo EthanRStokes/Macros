@@ -461,7 +461,7 @@ impl cosmic::Application for App {
                     move |selected| match selected {
                         0 => AddInstruction(len, Instruction::Wait(1000)),
                         1 => AddInstruction(len, Instruction::Token(Token::Text("text".into()))),
-                        2 => AddInstruction(len, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press))),
+                        2 => AddInstruction(len, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Click))),
                         3 => AddInstruction(len, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
                         4 => AddInstruction(len, Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel))),
                         5 => AddInstruction(len, Instruction::Token(Token::Scroll(4, Axis::Vertical))),
