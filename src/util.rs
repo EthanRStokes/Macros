@@ -19,7 +19,7 @@ pub(crate) fn add_macro(config: &Config, mac: Macro) {
     let tx = config.transaction();
     let mut macros = config.get::<Vec<Macro>>("macros");
 
-    if (macros.is_err()) {
+    if macros.is_err() {
         tx.set("macros", vec![mac]).expect("Error setting config");
     } else {
         macros.as_mut().unwrap().push(mac);
