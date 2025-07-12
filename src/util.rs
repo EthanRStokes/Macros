@@ -90,6 +90,15 @@ impl ThreadPool {
     pub(crate) fn add_worker(&mut self, worker: JoinHandle<()>) {
         self.workers.push(worker);
     }
+
+    /// Cleans up completed threads from the pool
+    /// 
+    /// This method checks each thread in the pool and removes those that have completed.
+    /// It should be called periodically to prevent the pool from growing indefinitely.
+    pub(crate) fn cleanup_completed_threads(&mut self) {
+        // Keep only threads that are still running
+        self.workers.retain(|worker| !worker.is_finished());
+    }
 }
 
 impl Drop for ThreadPool {

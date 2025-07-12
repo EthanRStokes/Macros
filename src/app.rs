@@ -197,8 +197,11 @@ impl cosmic::Application for App {
                         println!("Macro complete.");
                     }).expect("Macro thread failed to spawn");
 
-                    // TODO: remove from the pool once the thread has completed.
+                    // Add the new thread to the pool
                     pool.add_worker(thread);
+
+                    // Clean up any completed threads
+                    pool.cleanup_completed_threads();
                 }
             }
             AddInstruction(index, instruction) => {
