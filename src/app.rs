@@ -253,6 +253,8 @@ impl cosmic::Application for App {
                         let mut macros = self.config.get::<Vec<Macro>>("macros").expect("Macros config missing?");
                         macros[selected] = mac;
                         self.config.set("macros", macros).expect("Couldn't set macros config?");
+
+                        self.update_macros();
                     }
                 }
             }
