@@ -77,7 +77,7 @@ pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
                 }
             }
             _ => {
-                println!("Instruction not implemented.");
+                warn!("Instruction not implemented.");
             }
         }
     }
