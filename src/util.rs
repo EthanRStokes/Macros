@@ -1,6 +1,6 @@
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::thread::{sleep, JoinHandle};
-use cosmic::Application;
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use enigo::{Enigo, Keyboard, Mouse};
 use enigo::agent::Token::{Button, Key, MoveMouse, Raw, Scroll, Text};
@@ -29,7 +29,7 @@ pub(crate) fn add_macro(config: &Config, mac: Macro) {
     println!("Commit transaction: {:?}", tx.commit());
 }
 
-pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {
+pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
     for ins in mac.code {
         #[allow(unreachable_patterns)] match ins {
             Instruction::Wait(duration) => {
@@ -43,6 +43,15 @@ pub(crate) fn run_macro(mac: Macro, enigo: &mut Enigo) {
                     .expect(&format!("Failed to run script: {script}"));
             }
             Instruction::Token(token) => {
+                // Lock the mutex to get access to the enigo instance
+                let mut enigo = match enigo.lock() {
+                    Ok(guard) => guard,
+                    Err(err) => {
+                        warn!("Failed to lock enigo mutex: {}", err);
+                        return; // Exit if we can't get the lock
+                    }
+                };
+
                 match token {
                     Text(text) => {
                         enigo.text(&text).expect(&format!("Failed to type text: {text}"));

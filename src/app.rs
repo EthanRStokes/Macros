@@ -79,6 +79,10 @@ pub(crate) struct App {
 }
 
 impl App {
+    /// Updates the currently selected macro
+    /// 
+    /// # Arguments
+    /// * `selected` - The index of the selected macro, or None to clear selection
     fn update_macro(&mut self, selected: Option<usize>) {
         self.macro_selected = selected;
         if let Some(selected) = selected {
@@ -86,6 +90,10 @@ impl App {
         }
     }
 
+    /// Refreshes the list of macros from the config
+    /// 
+    /// This method retrieves all macros from the config and updates the internal
+    /// data structures (macros, macro_keys, macro_strs) accordingly.
     fn update_macros(&mut self) {
         let macs = match self.config.get::<Vec<Macro>>("macros") {
             Ok(macros) => macros,
@@ -197,15 +205,19 @@ impl cosmic::Application for App {
                 if let Some(mac) = self.current_macro.clone() {
                     let pool = &mut self.thread_pool;
                     let thread_num = pool.workers.len();
-                    let enigo = (&self.enigo).clone();
+                    let enigo = Arc::clone(&self.enigo);
 
-                    let thread = thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
+                    let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
                         println!("Running macro...");
-                        let mac = mac;
-                        let mut enigo = enigo.lock().unwrap();
-                        run_macro(mac, enigo.deref_mut());
+                        run_macro(mac, enigo);
                         println!("Macro complete.");
-                    }).expect("Macro thread failed to spawn");
+                    }) {
+                        Ok(thread) => thread,
+                        Err(err) => {
+                            warn!("Macro thread failed to spawn: {}", err);
+                            return Task::none(); // Return early if thread creation fails
+                        }
+                    };
 
                     // Add the new thread to the pool
                     pool.add_worker(thread);
