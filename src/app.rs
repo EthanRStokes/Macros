@@ -107,7 +107,7 @@ impl App {
 }
 
 fn add_default_config(config: &Config) {
-    add_macro(config, Macro::new("macro".into(), "description".into(), vec![]));
+    add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![]));
 }
 
 /// Implement [`cosmic::Application`] to integrate with COSMIC.
