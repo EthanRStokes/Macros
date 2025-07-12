@@ -2,6 +2,7 @@ use crate::app::Message::*;
 use crate::macros::{Instruction, Macro};
 use crate::util::{add_macro, button_to_string, key_to_string, string_to_button, string_to_key, ThreadPool};
 use crate::util::{get_macro, run_macro};
+use tracing::warn;
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use cosmic::iced::{Alignment, Length};
