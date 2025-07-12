@@ -197,41 +197,46 @@ impl cosmic::Application for App {
                 }
             }
             AddInstruction(index, instruction) => {
-                if let Some(mut mac) = self.current_macro.clone() {
+                if let Some(mac) = &mut self.current_macro {
                     mac.code.insert(index, instruction);
-                    self.current_macro = Some(mac);
                 }
             }
             EditInstruction(index, instruction) => {
-                if let Some(mut mac) = self.current_macro.clone() {
+                if let Some(mac) = &mut self.current_macro {
                     if mac.code.len() > 0 {
                         mac.code[index] = instruction;
-                        self.current_macro = Some(mac);
                     }
                 }
             }
             RemoveInstruction(index) => {
-                if let Some(mut mac) = self.current_macro.clone() {
+                if let Some(mac) = &mut self.current_macro {
                     if mac.code.len() > 0 && index >= 0 {
                         mac.code.remove(index as usize);
-                        self.current_macro = Some(mac);
                     }
                 }
             }
             ClearInstructions => {
-                if let Some(mut mac) = self.current_macro.clone() {
+                if let Some(mac) = &mut self.current_macro {
                     mac.code.clear();
-                    self.current_macro = Some(mac);
                 }
             }
             SaveMacro => {
                 if let Some(selected) = self.macro_selected {
-                    if let Some(mac) = self.current_macro.clone() {
-                        let mut macros = self.config.get::<Vec<Macro>>("macros").expect("Macros config missing?");
-                        macros[selected] = mac;
-                        self.config.set("macros", macros).expect("Couldn't set macros config?");
-
-                        self.update_macros();
+                    if let Some(mac) = &self.current_macro {
+                        match self.config.get::<Vec<Macro>>("macros") {
+                            Ok(mut macros) => {
+                                if selected < macros.len() {
+                                    macros[selected] = mac.clone(); // Clone only when needed for saving
+                                    match self.config.set("macros", macros) {
+                                        Ok(_) => self.update_macros(),
+                                        Err(err) => warn!("Couldn't set macros config: {}", err)
+                                    }
+                                } else {
+                                    warn!("Selected macro index out of bounds: {}", selected);
+                                }
+                            },
+                            Err(err) => warn!("Failed to get macros config: {}", err)
+                        }
                     }
                 }
             }
@@ -242,12 +247,19 @@ impl cosmic::Application for App {
             }
             RemoveMacro => {
                 if let Some(selected) = self.macro_selected {
-                    let mut macros = self.config.get::<Vec<Macro>>("macros")
-                        .expect("Macros config missing?");
-                    if selected < macros.len() {
-                        macros.remove(selected);
-                        self.config.set("macros", macros)
-                            .expect("Couldn't set macros config?");
+                    match self.config.get::<Vec<Macro>>("macros") {
+                        Ok(mut macros) => {
+                            if selected < macros.len() {
+                                macros.remove(selected);
+                                match self.config.set("macros", macros) {
+                                    Ok(_) => {},
+                                    Err(err) => warn!("Couldn't set macros config: {}", err)
+                                }
+                            } else {
+                                warn!("Selected macro index out of bounds: {}", selected);
+                            }
+                        },
+                        Err(err) => warn!("Failed to get macros config: {}", err)
                     }
                     self.update_macros();
                     self.current_macro = None;
