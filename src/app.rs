@@ -18,6 +18,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+// Constants for default values
+const DEFAULT_WAIT_TIME: u64 = 1000;
+const DEFAULT_SCROLL_AMOUNT: i32 = 4;
+
 // Constants for icon paths
 const ICON_ADD: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-add.svg";
 const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-remove.svg";
@@ -83,7 +87,13 @@ impl App {
     }
 
     fn update_macros(&mut self) {
-        let macs = self.config.get::<Vec<Macro>>("macros").expect("Macros file not found");
+        let macs = match self.config.get::<Vec<Macro>>("macros") {
+            Ok(macros) => macros,
+            Err(err) => {
+                warn!("Failed to get macros config: {}", err);
+                Vec::new() // Provide a default empty vector
+            }
+        };
         self.macros.clear();
         self.macro_keys.clear();
         self.macro_strs.clear();
@@ -429,12 +439,12 @@ impl cosmic::Application for App {
                         ],
                         None,
                         move |selected| match selected {
-                            0 => AddInstruction(index, Instruction::Wait(1000)),
+                            0 => AddInstruction(index, Instruction::Wait(DEFAULT_WAIT_TIME)),
                             1 => AddInstruction(index, Instruction::Token(Token::Text("text".into()))),
                             2 => AddInstruction(index, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Click))),
                             3 => AddInstruction(index, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
-                            4 => AddInstruction(index, Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel))),
-                            5 => AddInstruction(index, Instruction::Token(Token::Scroll(4, Axis::Vertical))),
+                            4 => AddInstruction(index, Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
+                            5 => AddInstruction(index, Instruction::Token(Token::Scroll(DEFAULT_SCROLL_AMOUNT, Axis::Vertical))),
                             6 => AddInstruction(index, Instruction::Script("script".into())),
                             _ => unreachable!(),
                         },
@@ -458,12 +468,12 @@ impl cosmic::Application for App {
                     ],
                     None,
                     move |selected| match selected {
-                        0 => AddInstruction(len, Instruction::Wait(1000)),
+                        0 => AddInstruction(len, Instruction::Wait(DEFAULT_WAIT_TIME)),
                         1 => AddInstruction(len, Instruction::Token(Token::Text("text".into()))),
                         2 => AddInstruction(len, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Click))),
                         3 => AddInstruction(len, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
-                        4 => AddInstruction(len, Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel))),
-                        5 => AddInstruction(len, Instruction::Token(Token::Scroll(4, Axis::Vertical))),
+                        4 => AddInstruction(len, Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
+                        5 => AddInstruction(len, Instruction::Token(Token::Scroll(DEFAULT_SCROLL_AMOUNT, Axis::Vertical))),
                         6 => AddInstruction(len, Instruction::Script("script".into())),
                         _ => unreachable!(),
                     },
