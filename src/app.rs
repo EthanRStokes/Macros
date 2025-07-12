@@ -25,6 +25,8 @@ const DEFAULT_SCROLL_AMOUNT: i32 = 4;
 // Constants for icon paths
 const ICON_ADD: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-add.svg";
 const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-remove.svg";
+const ICON_UP: &str = "/usr/share/icons/breeze-dark/actions/16/go-up.svg";
+const ICON_DOWN: &str = "/usr/share/icons/breeze-dark/actions/16/go-down.svg";
 
 #[derive(Clone, Copy)]
 pub(crate) enum Page {
@@ -55,6 +57,9 @@ pub(crate) enum Message {
     AddInstruction(usize, Instruction),
     EditInstruction(usize, Instruction),
     RemoveInstruction(isize),
+    /// Reorder an instruction by moving it up or down
+    /// Parameters: (index, direction) where direction is -1 for up, 1 for down
+    ReorderInstruction(usize, isize),
     ClearInstructions,
     SaveMacro,
     NewMacro,
@@ -245,6 +250,25 @@ impl cosmic::Application for App {
                     }
                 }
             }
+            ReorderInstruction(index, direction) => {
+                if let Some(mac) = &mut self.current_macro {
+                    let len = mac.code.len();
+                    if len > 1 && index < len {
+                        let new_index = if direction < 0 {
+                            // Move up (swap with previous)
+                            if index > 0 { index - 1 } else { index }
+                        } else {
+                            // Move down (swap with next)
+                            if index < len - 1 { index + 1 } else { index }
+                        };
+
+                        if new_index != index {
+                            // Swap the instructions
+                            mac.code.swap(index, new_index);
+                        }
+                    }
+                }
+            }
             ClearInstructions => {
                 if let Some(mac) = &mut self.current_macro {
                     mac.code.clear();
@@ -425,6 +449,20 @@ impl cosmic::Application for App {
                 };
                 let instruction = row![
                     instruction,
+                    // Up button
+                    tooltip(
+                        widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_UP)))
+                            .on_press(ReorderInstruction(index, -1)),
+                        container("Move up"),
+                        tooltip::Position::Top
+                    ),
+                    // Down button
+                    tooltip(
+                        widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_DOWN)))
+                            .on_press(ReorderInstruction(index, 1)),
+                        container("Move down"),
+                        tooltip::Position::Bottom
+                    ),
                     widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE)))
                         .on_press(RemoveInstruction(index as isize)),
                     cosmic::widget::dropdown(
