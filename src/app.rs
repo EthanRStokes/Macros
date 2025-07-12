@@ -92,30 +92,7 @@ impl App {
 }
 
 fn add_default_config(config: &Config) {
-    add_macro(config, Macro::new("macro".into(), "description".into(), vec![
-        Instruction::Wait(1000),
-        Instruction::Token(Token::MoveMouse(100, 100, Coordinate::Rel)),
-        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
-        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
-        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Press)),
-        Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Release)),
-        Instruction::Wait(1000),
-        Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Press)),
-        Instruction::Token(Token::Key(Key::Unicode('b'.into()), Direction::Release)),
-        Instruction::Token(Token::Text("All of this text just got pasted".into())),
-        Instruction::Wait(500),
-        Instruction::Token(Token::Scroll(4, Axis::Vertical)),
-    ]));
-    add_macro(config, Macro::new("macro2".into(), "description".into(), vec![
-        Instruction::Wait(1000),
-        Instruction::Token(Token::Text("NJOPFPDSFSODPFJODSIFJOPSDPFJ SPAM".into())),
-        Instruction::Wait(500),
-        Instruction::Token(Token::Scroll(4, Axis::Vertical)),
-    ]));
-    add_macro(config, Macro::new("rustrustrust".into(), "awesome macro".into(), vec![
-        Instruction::Wait(1000),
-        Instruction::Token(Token::Text("Rust Rust Rust Rust Rust".into())),
-    ]));
+    add_macro(config, Macro::new("macro".into(), "description".into(), vec![]));
 }
 
 /// Implement [`cosmic::Application`] to integrate with COSMIC.
