@@ -100,13 +100,10 @@ impl App {
     /// This method retrieves all macros from the config and updates the internal
     /// data structures (macros, macro_keys, macro_strs) accordingly.
     fn update_macros(&mut self) {
-        let macs = match self.config.get::<Vec<Macro>>("macros") {
-            Ok(macros) => macros,
-            Err(err) => {
-                warn!("Failed to get macros config: {}", err);
-                Vec::new() // Provide a default empty vector
-            }
-        };
+        let macs = self.config.get::<Vec<Macro>>("macros").unwrap_or_else(|err| {
+            warn!("Failed to get macros config: {}", err);
+            Vec::new() // Provide a default empty vector
+        });
         self.macros.clear();
         self.macro_keys.clear();
         self.macro_strs.clear();
