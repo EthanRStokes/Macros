@@ -7,7 +7,6 @@ use enigo::agent::Token::{Button, Key, MoveMouse, Raw, Scroll, Text};
 use enigo::Key as EnigoKey;
 use enigo::Button as EnigoButton;
 use tracing::warn;
-use crate::app::App;
 use crate::macros::{Instruction, Macro};
 
 pub(crate) fn get_macro(config: &Config, mac: usize) -> Macro {
@@ -329,5 +328,257 @@ pub(crate) fn button_to_string(button: &EnigoButton) -> Result<&'static str, &'s
         EnigoButton::ScrollLeft => Ok("ScrollLeft"),
         EnigoButton::ScrollRight => Ok("ScrollRight"),
         _ => Err("Unknown button"),
+    }
+}
+
+/// Config utility functions
+pub(crate) mod config {
+    use super::*;
+    use tracing::warn;
+
+    pub(crate) fn get_macros_from_config(config: &Config) -> Vec<Macro> {
+        config.get::<Vec<Macro>>("macros").unwrap_or_else(|err| {
+            warn!("Failed to get macros config: {}", err);
+            Vec::new()
+        })
+    }
+
+    pub(crate) fn set_macros_in_config(config: &Config, macros: Vec<Macro>) -> Result<(), String> {
+        config.set("macros", macros).map_err(|err| {
+            let error_msg = format!("Failed to set macros config: {}", err);
+            warn!("{}", error_msg);
+            error_msg
+        })
+    }
+
+    pub(crate) fn update_macro_at_index(config: &Config, index: usize, new_macro: &Macro) -> Result<(), String> {
+        let mut macros = get_macros_from_config(config);
+        if index < macros.len() {
+            macros[index] = new_macro.clone();
+            set_macros_in_config(config, macros)
+        } else {
+            Err(format!("Macro index {} out of bounds", index))
+        }
+    }
+
+    pub(crate) fn remove_macro_at_index(config: &Config, index: usize) -> Result<(), String> {
+        let mut macros = get_macros_from_config(config);
+        if index < macros.len() {
+            macros.remove(index);
+            set_macros_in_config(config, macros)
+        } else {
+            Err(format!("Macro index {} out of bounds", index))
+        }
+    }
+
+    pub(crate) fn save_config_value<T: serde::Serialize>(config: &Config, key: &str, value: T) -> Result<(), String> {
+        config.set(key, value).map_err(|err| {
+            let error_msg = format!("Failed to save {} to config: {}", key, err);
+            warn!("{}", error_msg);
+            error_msg
+        })
+    }
+
+    pub(crate) fn get_config_value<T: serde::de::DeserializeOwned>(config: &Config, key: &str) -> Option<T> {
+        config.get::<T>(key).ok()
+    }
+}
+
+/// Thread management utilities
+pub(crate) mod thread {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::thread::{self};
+    use tracing::warn;
+
+    pub(crate) fn spawn_macro_thread<F>(
+        thread_pool: &mut ThreadPool,
+        name: String,
+        task: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let thread_num = thread_pool.workers.len();
+        let thread_name = format!("macro_thread_{}: {}", thread_num, name);
+        
+        match thread::Builder::new().name(thread_name).spawn(task) {
+            Ok(thread) => {
+                thread_pool.add_worker(thread);
+                thread_pool.cleanup_completed_threads();
+                Ok(())
+            }
+            Err(err) => {
+                let error_msg = format!("Failed to spawn thread '{}': {}", name, err);
+                warn!("{}", error_msg);
+                Err(error_msg)
+            }
+        }
+    }
+
+    pub(crate) fn create_loop_task(
+        mac: Macro,
+        enigo: Arc<Mutex<Enigo>>,
+        loop_flag: Arc<Mutex<bool>>,
+    ) -> impl FnOnce() + Send + 'static {
+        move || {
+            println!("Starting macro loop: {}", mac.name);
+            loop {
+                // Check if we should stop looping
+                if let Ok(should_continue) = loop_flag.lock() {
+                    if !*should_continue {
+                        break;
+                    }
+                } else {
+                    warn!("Failed to lock loop flag, stopping loop");
+                    break;
+                }
+
+                run_macro(mac.clone(), Arc::clone(&enigo));
+
+                // Small delay between iterations to prevent overwhelming the system
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            println!("Macro loop stopped.");
+        }
+    }
+
+    pub(crate) fn create_single_run_task(
+        mac: Macro,
+        enigo: Arc<Mutex<Enigo>>,
+    ) -> impl FnOnce() + Send + 'static {
+        move || {
+            println!("Running macro: {}", mac.name);
+            run_macro(mac, enigo);
+            println!("Macro complete.");
+        }
+    }
+}
+
+/// Instruction creation utilities
+pub(crate) mod instruction_utils {
+    use super::*;
+    use enigo::agent::Token;
+    use enigo::{Axis, Button, Coordinate, Direction, Key};
+
+    pub(crate) fn create_default_instruction(instruction_type: usize) -> Option<Instruction> {
+        match instruction_type {
+            0 => Some(Instruction::Wait(1000)), // Default wait time
+            1 => Some(Instruction::Token(Token::Text("text".into()))),
+            2 => Some(Instruction::Token(Token::Key(Key::Unicode('a'), Direction::Click))),
+            3 => Some(Instruction::Token(Token::Button(Button::Left, Direction::Click))),
+            4 => Some(Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
+            5 => Some(Instruction::Token(Token::Scroll(4, Axis::Vertical))), // Default scroll amount
+            6 => Some(Instruction::Script("script".into())),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn get_instruction_type_names() -> &'static [&'static str] {
+        &[
+            "Wait",
+            "Text", 
+            "Key",
+            "Mouse Button",
+            "Move Mouse",
+            "Scroll",
+            "Run Script",
+        ]
+    }
+}
+
+/// UI helper utilities
+pub(crate) mod ui_utils {
+    use enigo::{Axis, Coordinate, Direction};
+
+    pub(crate) fn direction_to_index(direction: &Direction) -> usize {
+        match direction {
+            Direction::Click => 0,
+            Direction::Press => 1,
+            Direction::Release => 2,
+        }
+    }
+
+    pub(crate) fn index_to_direction(index: usize) -> Direction {
+        match index {
+            0 => Direction::Click,
+            1 => Direction::Press,
+            2 => Direction::Release,
+            _ => Direction::Click, // Default fallback
+        }
+    }
+
+    pub(crate) fn coordinate_to_index(coordinate: &Coordinate) -> usize {
+        match coordinate {
+            Coordinate::Abs => 0,
+            Coordinate::Rel => 1,
+        }
+    }
+
+    pub(crate) fn index_to_coordinate(index: usize) -> Coordinate {
+        match index {
+            0 => Coordinate::Abs,
+            1 => Coordinate::Rel,
+            _ => Coordinate::Abs, // Default fallback
+        }
+    }
+
+    pub(crate) fn axis_to_index(axis: &Axis) -> usize {
+        match axis {
+            Axis::Vertical => 0,
+            Axis::Horizontal => 1,
+        }
+    }
+
+    pub(crate) fn index_to_axis(index: usize) -> Axis {
+        match index {
+            0 => Axis::Vertical,
+            1 => Axis::Horizontal,
+            _ => Axis::Vertical, // Default fallback
+        }
+    }
+
+    pub(crate) fn get_direction_names() -> &'static [&'static str] {
+        &["Click", "Press", "Release"]
+    }
+
+    pub(crate) fn get_coordinate_names() -> &'static [&'static str] {
+        &["Absolute", "Relative"]
+    }
+
+    pub(crate) fn get_axis_names() -> &'static [&'static str] {
+        &["Vertical", "Horizontal"]
+    }
+}
+
+/// Loop control utilities
+pub(crate) mod loop_control {
+    use std::sync::{Arc, Mutex};
+    use tracing::warn;
+
+    pub(crate) fn set_loop_state(loop_flag: &Arc<Mutex<bool>>, state: bool) -> Result<(), String> {
+        match loop_flag.lock() {
+            Ok(mut flag) => {
+                *flag = state;
+                Ok(())
+            }
+            Err(err) => {
+                let error_msg = format!("Failed to set loop state: {}", err);
+                warn!("{}", error_msg);
+                Err(error_msg)
+            }
+        }
+    }
+
+    pub(crate) fn get_loop_state(loop_flag: &Arc<Mutex<bool>>) -> bool {
+        loop_flag.lock().map(|flag| *flag).unwrap_or(false)
+    }
+
+    pub(crate) fn stop_loop(loop_flag: &Arc<Mutex<bool>>) -> Result<(), String> {
+        set_loop_state(loop_flag, false)
+    }
+
+    pub(crate) fn start_loop(loop_flag: &Arc<Mutex<bool>>) -> Result<(), String> {
+        set_loop_state(loop_flag, true)
     }
 }

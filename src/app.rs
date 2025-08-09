@@ -2,6 +2,7 @@ use crate::app::Message::*;
 use crate::macros::{Instruction, Macro};
 use crate::util::{add_macro, button_to_string, key_to_string, string_to_button, string_to_key, ThreadPool};
 use crate::util::{get_macro, run_macro};
+use crate::util::{config, thread, loop_control};
 use tracing::warn;
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
@@ -15,7 +16,6 @@ use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 use cosmic::dialog::ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use cosmic::iced::futures::executor::block_on;
 use cosmic::iced::futures::StreamExt;
@@ -111,10 +111,7 @@ impl App {
     /// This method retrieves all macros from the config and updates the internal
     /// data structures (macros, macro_keys, macro_strs) accordingly.
     fn update_macros(&mut self) {
-        let macs = self.config.get::<Vec<Macro>>("macros").unwrap_or_else(|err| {
-            warn!("Failed to get macros config: {}", err);
-            Vec::new() // Provide a default empty vector
-        });
+        let macs = config::get_macros_from_config(&self.config);
         self.macros.clear();
         self.macro_keys.clear();
         self.macro_strs.clear();
@@ -131,19 +128,10 @@ impl App {
     fn auto_save_current_macro(&mut self) {
         if let Some(selected) = self.macro_selected {
             if let Some(mac) = &self.current_macro {
-                match self.config.get::<Vec<Macro>>("macros") {
-                    Ok(mut macros) => {
-                        if selected < macros.len() {
-                            macros[selected] = mac.clone();
-                            match self.config.set("macros", macros) {
-                                Ok(_) => self.update_macros(),
-                                Err(err) => warn!("Couldn't set macros config: {}", err)
-                            }
-                        } else {
-                            warn!("Selected macro index out of bounds: {}", selected);
-                        }
-                    },
-                    Err(err) => warn!("Failed to get macros config: {}", err)
+                if let Err(err) = config::update_macro_at_index(&self.config, selected, mac) {
+                    warn!("Failed to update macro: {}", err);
+                } else {
+                    self.update_macros();
                 }
             }
         }
@@ -303,7 +291,7 @@ impl cosmic::Application for App {
                                                     run_macro(mac.clone(), Arc::clone(&enigo));
 
                                                     // Small delay between iterations to prevent overwhelming the system
-                                                    thread::sleep(std::time::Duration::from_millis(100));
+                                                    std::thread::sleep(std::time::Duration::from_millis(100));
                                                 }
                                                 println!("Macro loop stopped via global shortcut.");
                                             });
@@ -368,75 +356,41 @@ impl cosmic::Application for App {
             RunMacro => {
                 if let Some(mac) = self.current_macro.clone() {
                     if self.loop_mode_enabled {
-                        // If loop mode is enabled, start looping
-                        if let Ok(mut is_looping) = self.is_looping.lock() {
-                            *is_looping = true;
+                        // Start loop mode execution
+                        if let Err(err) = loop_control::start_loop(&self.is_looping) {
+                            warn!("Failed to start loop: {}", err);
+                            return Task::none();
                         }
 
-                        let pool = &mut self.thread_pool;
-                        let thread_num = pool.workers.len();
-                        let enigo = Arc::clone(&self.enigo);
-                        let loop_flag = Arc::clone(&self.is_looping);
+                        let loop_task = thread::create_loop_task(
+                            mac.clone(),
+                            Arc::clone(&self.enigo),
+                            Arc::clone(&self.is_looping)
+                        );
 
-                        let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
-                            println!("Starting macro loop: {}", mac.name);
-                            loop {
-                                // Check if we should stop looping
-                                if let Ok(should_continue) = loop_flag.lock() {
-                                    if !*should_continue {
-                                        break;
-                                    }
-                                } else {
-                                    warn!("Failed to lock loop flag, stopping loop");
-                                    break;
-                                }
-
-                                run_macro(mac.clone(), Arc::clone(&enigo));
-
-                                // Small delay between iterations to prevent overwhelming the system
-                                thread::sleep(std::time::Duration::from_millis(100));
-                            }
-                            println!("Macro loop stopped.");
-                        }) {
-                            Ok(thread) => thread,
-                            Err(err) => {
-                                warn!("Macro loop thread failed to spawn: {}", err);
-                                // Reset the looping flag if thread creation fails
-                                if let Ok(mut is_looping) = self.is_looping.lock() {
-                                    *is_looping = false;
-                                }
-                                return Task::none();
-                            }
-                        };
-
-                        // Add the new thread to the pool
-                        pool.add_worker(thread);
-
-                        // Clean up any completed threads
-                        pool.cleanup_completed_threads();
+                        if let Err(err) = thread::spawn_macro_thread(
+                            &mut self.thread_pool,
+                            format!("loop_{}", mac.name),
+                            loop_task
+                        ) {
+                            warn!("Failed to spawn loop thread: {}", err);
+                            // Reset loop state if thread spawn fails
+                            let _ = loop_control::stop_loop(&self.is_looping);
+                        }
                     } else {
-                        // Normal single execution
-                        let pool = &mut self.thread_pool;
-                        let thread_num = pool.workers.len();
-                        let enigo = Arc::clone(&self.enigo);
+                        // Single execution mode
+                        let single_task = thread::create_single_run_task(
+                            mac.clone(),
+                            Arc::clone(&self.enigo)
+                        );
 
-                        let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
-                            println!("Running macro...");
-                            run_macro(mac, enigo);
-                            println!("Macro complete.");
-                        }) {
-                            Ok(thread) => thread,
-                            Err(err) => {
-                                warn!("Macro thread failed to spawn: {}", err);
-                                return Task::none(); // Return early if thread creation fails
-                            }
-                        };
-
-                        // Add the new thread to the pool
-                        pool.add_worker(thread);
-
-                        // Clean up any completed threads
-                        pool.cleanup_completed_threads();
+                        if let Err(err) = thread::spawn_macro_thread(
+                            &mut self.thread_pool,
+                            format!("single_{}", mac.name),
+                            single_task
+                        ) {
+                            warn!("Failed to spawn single run thread: {}", err);
+                        }
                     }
                 }
             }
@@ -491,19 +445,10 @@ impl cosmic::Application for App {
             SaveMacro => {
                 if let Some(selected) = self.macro_selected {
                     if let Some(mac) = &self.current_macro {
-                        match self.config.get::<Vec<Macro>>("macros") {
-                            Ok(mut macros) => {
-                                if selected < macros.len() {
-                                    macros[selected] = mac.clone(); // Clone only when needed for saving
-                                    match self.config.set("macros", macros) {
-                                        Ok(_) => self.update_macros(),
-                                        Err(err) => warn!("Couldn't set macros config: {}", err)
-                                    }
-                                } else {
-                                    warn!("Selected macro index out of bounds: {}", selected);
-                                }
-                            },
-                            Err(err) => warn!("Failed to get macros config: {}", err)
+                        if let Err(err) = config::update_macro_at_index(&self.config, selected, mac) {
+                            warn!("Failed to save macro: {}", err);
+                        } else {
+                            self.update_macros();
                         }
                     }
                 }
@@ -515,29 +460,19 @@ impl cosmic::Application for App {
             }
             RemoveMacro => {
                 if let Some(selected) = self.macro_selected {
-                    match self.config.get::<Vec<Macro>>("macros") {
-                        Ok(mut macros) => {
-                            if selected < macros.len() {
-                                macros.remove(selected);
-                                match self.config.set("macros", macros) {
-                                    Ok(_) => {},
-                                    Err(err) => warn!("Couldn't set macros config: {}", err)
-                                }
-                            } else {
-                                warn!("Selected macro index out of bounds: {}", selected);
-                            }
-                        },
-                        Err(err) => warn!("Failed to get macros config: {}", err)
+                    if let Err(err) = config::remove_macro_at_index(&self.config, selected) {
+                        warn!("Failed to remove macro: {}", err);
+                    } else {
+                        self.update_macros();
+                        self.current_macro = None;
+                        self.macro_selected = None;
                     }
-                    self.update_macros();
-                    self.current_macro = None;
-                    self.macro_selected = None;
                 }
             }
             ToggleLoopMode(enabled) => {
                 self.loop_mode_enabled = enabled;
-                // Store loop mode setting in config so global shortcuts can access it
-                if let Err(err) = self.config.set("loop_mode_enabled", enabled) {
+                // Store loop mode setting in config
+                if let Err(err) = config::save_config_value(&self.config, "loop_mode_enabled", enabled) {
                     warn!("Failed to save loop mode setting: {}", err);
                 }
             }
@@ -546,7 +481,7 @@ impl cosmic::Application for App {
     }
 
     /// Creates a view after each update.
-    fn view(&self) -> Element<Self::Message> {
+    fn view(&'_ self) -> Element<'_, Self::Message> {
         // The string associated with the page. Ex: "Manage macro"
         let page_content = self
             .nav_model
