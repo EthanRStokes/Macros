@@ -292,7 +292,7 @@ impl cosmic::Application for App {
                                                     run_macro(mac.clone(), Arc::clone(&enigo));
 
                                                     // Small delay between iterations to prevent overwhelming the system
-                                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                                    thread::sleep(std::time::Duration::from_millis(1));
                                                 }
                                                 println!("Macro loop stopped via global shortcut.");
                                             });
