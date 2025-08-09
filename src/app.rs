@@ -15,7 +15,7 @@ use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use cosmic::dialog::ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use cosmic::iced::futures::executor::block_on;
 use cosmic::iced::futures::StreamExt;
@@ -55,6 +55,7 @@ impl Page {
 pub(crate) enum Message {
     SelectMacro(usize),
     RunMacro,
+    ToggleLoopMode(bool),
     SetTitle(String),
     AddInstruction(usize, Instruction),
     EditInstruction(usize, Instruction),
@@ -83,6 +84,10 @@ pub(crate) struct App {
     macros: SlotMap<DefaultKey, Macro>,
     macro_keys: SecondaryMap<DefaultKey, String>,
     macro_strs: Vec<String>,
+    /// Flag to control looping execution
+    is_looping: Arc<Mutex<bool>>,
+    /// UI setting for whether to run in loop mode
+    loop_mode_enabled: bool,
 }
 
 impl App {
@@ -192,6 +197,8 @@ impl cosmic::Application for App {
             macros: SlotMap::new(),
             macro_keys: SecondaryMap::new(),
             macro_strs: vec![],
+            is_looping: Arc::new(Mutex::new(false)),
+            loop_mode_enabled: false,
         };
 
         let config = &app.config;
@@ -203,6 +210,11 @@ impl cosmic::Application for App {
         }
 
         app.update_macros();
+
+        // Restore the loop mode setting from config
+        if let Ok(loop_mode) = app.config.get::<bool>("loop_mode_enabled") {
+            app.loop_mode_enabled = loop_mode;
+        }
 
         // Restore the previously selected macro from config
         if let Ok(selected_index) = app.config.get::<Option<usize>>("selected_macro") {
@@ -224,40 +236,105 @@ impl cosmic::Application for App {
         let shortcuts = block_on(GlobalShortcuts::new()).unwrap();
         let session = block_on(shortcuts.create_session()).unwrap();
 
-        // --- bind a "run_macro" shortcut and listen for activations ---
+        // --- bind shortcuts ---
         let run_macro_sc = NewShortcut::new("run_macro", "Run Current Macro")
             .preferred_trigger(Some("<Ctrl><Alt>M"));
-        block_on(shortcuts.bind_shortcuts(&session, &[run_macro_sc], None)).unwrap();
+        let stop_loop_sc = NewShortcut::new("stop_loop", "Stop Macro Loop")
+            .preferred_trigger(Some("<Ctrl><Alt>S"));
+
+        block_on(shortcuts.bind_shortcuts(&session, &[run_macro_sc, stop_loop_sc], None)).unwrap();
 
         let mut activations = block_on(shortcuts.receive_activated()).unwrap();
         let enigo_clone = Arc::clone(&app.enigo);
         let config_clone = app.config.clone();
+        let is_looping_clone = Arc::clone(&app.is_looping);
+
         tokio::spawn(async move {
             while let Some(evt) = activations.next().await {
-                if evt.shortcut_id() == "run_macro" {
-                    println!("Global shortcut activated: run_macro");
-                    // Get the selected macro index from config
-                    if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
-                        if let Some(index) = selected_index {
-                            if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
-                                if let Some(mac) = macros.get(index) {
-                                    let enigo = Arc::clone(&enigo_clone);
-                                    let mac = mac.clone();
+                match evt.shortcut_id() {
+                    "run_macro" => {
+                        println!("Global shortcut activated: run_macro");
 
-                                    // Run the macro in a separate thread
-                                    tokio::task::spawn_blocking(move || {
-                                        println!("Running macro via global shortcut: {}", mac.name);
-                                        run_macro(mac, enigo);
-                                        println!("Macro complete.");
-                                    });
-                                } else {
-                                    println!("No macro found at index {}", index);
-                                }
-                            }
+                        // Check if loop mode is enabled
+                        let loop_mode_enabled = config_clone.get::<bool>("loop_mode_enabled").unwrap_or(false);
+
+                        // Check if already looping
+                        let currently_looping = if let Ok(is_looping) = is_looping_clone.lock() {
+                            *is_looping
                         } else {
-                            println!("No macro currently selected for global shortcut");
+                            false
+                        };
+
+                        if loop_mode_enabled && currently_looping {
+                            // Already looping, ignore the request
+                            println!("Macro is already looping, ignoring run request");
+                            continue;
+                        }
+
+                        // Get the selected macro index from config
+                        if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
+                            if let Some(index) = selected_index {
+                                if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
+                                    if let Some(mac) = macros.get(index) {
+                                        let enigo = Arc::clone(&enigo_clone);
+                                        let mac = mac.clone();
+
+                                        if loop_mode_enabled {
+                                            // Start looping
+                                            if let Ok(mut is_looping) = is_looping_clone.lock() {
+                                                *is_looping = true;
+                                            }
+
+                                            let loop_flag = Arc::clone(&is_looping_clone);
+
+                                            tokio::task::spawn_blocking(move || {
+                                                println!("Starting macro loop via global shortcut: {}", mac.name);
+                                                loop {
+                                                    // Check if we should stop looping
+                                                    if let Ok(should_continue) = loop_flag.lock() {
+                                                        if !*should_continue {
+                                                            break;
+                                                        }
+                                                    } else {
+                                                        warn!("Failed to lock loop flag, stopping loop");
+                                                        break;
+                                                    }
+
+                                                    run_macro(mac.clone(), Arc::clone(&enigo));
+
+                                                    // Small delay between iterations to prevent overwhelming the system
+                                                    thread::sleep(std::time::Duration::from_millis(100));
+                                                }
+                                                println!("Macro loop stopped via global shortcut.");
+                                            });
+                                        } else {
+                                            // Run the macro once in a separate thread
+                                            tokio::task::spawn_blocking(move || {
+                                                println!("Running macro via global shortcut: {}", mac.name);
+                                                run_macro(mac, enigo);
+                                                println!("Macro complete.");
+                                            });
+                                        }
+                                    } else {
+                                        println!("No macro found at index {}", index);
+                                    }
+                                }
+                            } else {
+                                println!("No macro currently selected for global shortcut");
+                            }
                         }
                     }
+                    "stop_loop" => {
+                        println!("Global shortcut activated: stop_loop");
+                        // Set the looping flag to false to stop any running loops
+                        if let Ok(mut is_looping) = is_looping_clone.lock() {
+                            *is_looping = false;
+                            println!("Loop stop requested via global shortcut.");
+                        } else {
+                            println!("Failed to access loop flag.");
+                        }
+                    }
+                    _ => {}
                 }
             }
         });
@@ -290,27 +367,77 @@ impl cosmic::Application for App {
             }
             RunMacro => {
                 if let Some(mac) = self.current_macro.clone() {
-                    let pool = &mut self.thread_pool;
-                    let thread_num = pool.workers.len();
-                    let enigo = Arc::clone(&self.enigo);
-
-                    let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
-                        println!("Running macro...");
-                        run_macro(mac, enigo);
-                        println!("Macro complete.");
-                    }) {
-                        Ok(thread) => thread,
-                        Err(err) => {
-                            warn!("Macro thread failed to spawn: {}", err);
-                            return Task::none(); // Return early if thread creation fails
+                    if self.loop_mode_enabled {
+                        // If loop mode is enabled, start looping
+                        if let Ok(mut is_looping) = self.is_looping.lock() {
+                            *is_looping = true;
                         }
-                    };
 
-                    // Add the new thread to the pool
-                    pool.add_worker(thread);
+                        let pool = &mut self.thread_pool;
+                        let thread_num = pool.workers.len();
+                        let enigo = Arc::clone(&self.enigo);
+                        let loop_flag = Arc::clone(&self.is_looping);
 
-                    // Clean up any completed threads
-                    pool.cleanup_completed_threads();
+                        let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
+                            println!("Starting macro loop: {}", mac.name);
+                            loop {
+                                // Check if we should stop looping
+                                if let Ok(should_continue) = loop_flag.lock() {
+                                    if !*should_continue {
+                                        break;
+                                    }
+                                } else {
+                                    warn!("Failed to lock loop flag, stopping loop");
+                                    break;
+                                }
+
+                                run_macro(mac.clone(), Arc::clone(&enigo));
+
+                                // Small delay between iterations to prevent overwhelming the system
+                                thread::sleep(std::time::Duration::from_millis(100));
+                            }
+                            println!("Macro loop stopped.");
+                        }) {
+                            Ok(thread) => thread,
+                            Err(err) => {
+                                warn!("Macro loop thread failed to spawn: {}", err);
+                                // Reset the looping flag if thread creation fails
+                                if let Ok(mut is_looping) = self.is_looping.lock() {
+                                    *is_looping = false;
+                                }
+                                return Task::none();
+                            }
+                        };
+
+                        // Add the new thread to the pool
+                        pool.add_worker(thread);
+
+                        // Clean up any completed threads
+                        pool.cleanup_completed_threads();
+                    } else {
+                        // Normal single execution
+                        let pool = &mut self.thread_pool;
+                        let thread_num = pool.workers.len();
+                        let enigo = Arc::clone(&self.enigo);
+
+                        let thread = match thread::Builder::new().name(format!("macro_thread: {thread_num}")).spawn(move || {
+                            println!("Running macro...");
+                            run_macro(mac, enigo);
+                            println!("Macro complete.");
+                        }) {
+                            Ok(thread) => thread,
+                            Err(err) => {
+                                warn!("Macro thread failed to spawn: {}", err);
+                                return Task::none(); // Return early if thread creation fails
+                            }
+                        };
+
+                        // Add the new thread to the pool
+                        pool.add_worker(thread);
+
+                        // Clean up any completed threads
+                        pool.cleanup_completed_threads();
+                    }
                 }
             }
             AddInstruction(index, instruction) => {
@@ -407,6 +534,13 @@ impl cosmic::Application for App {
                     self.macro_selected = None;
                 }
             }
+            ToggleLoopMode(enabled) => {
+                self.loop_mode_enabled = enabled;
+                // Store loop mode setting in config so global shortcuts can access it
+                if let Err(err) = self.config.set("loop_mode_enabled", enabled) {
+                    warn!("Failed to save loop mode setting: {}", err);
+                }
+            }
         }
         Task::none()
     }
@@ -432,12 +566,20 @@ impl cosmic::Application for App {
                 cosmic::widget::text("Select macro"),
                 cosmic::widget::dropdown(&self.macro_strs, self.macro_selected, |x: usize| SelectMacro(x))
             ],
-            tooltip(
-                button("Run macro")
-                    .on_press(RunMacro),
-                container("Runs the current macro"),
-                tooltip::Position::Right
-            ),
+            column![
+                tooltip(
+                    button("Run macro")
+                        .on_press(RunMacro),
+                    container("Runs the current macro once or starts looping if enabled"),
+                    tooltip::Position::Right
+                ),
+                tooltip(
+                    cosmic::widget::checkbox("Loop mode", self.loop_mode_enabled)
+                        .on_toggle(ToggleLoopMode),
+                    container("Enable to loop the macro continuously"),
+                    tooltip::Position::Right
+                )
+            ],
             tooltip(
                 widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_ADD)))
                     .on_press(NewMacro),
