@@ -13,10 +13,12 @@ use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
-use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use cosmic::dialog::ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+use cosmic::iced::futures::executor::block_on;
+use cosmic::iced::futures::StreamExt;
 
 // Constants for default values
 const DEFAULT_WAIT_TIME: u64 = 1000;
@@ -90,6 +92,10 @@ impl App {
     /// * `selected` - The index of the selected macro, or None to clear selection
     fn update_macro(&mut self, selected: Option<usize>) {
         self.macro_selected = selected;
+        // Store the selected macro index in config so global shortcuts can access it
+        if let Err(err) = self.config.set("selected_macro", selected) {
+            warn!("Failed to save selected macro index: {}", err);
+        }
         if let Some(selected) = selected {
             self.current_macro = Some(get_macro(&self.config, selected));
         }
@@ -112,6 +118,29 @@ impl App {
             let mac = self.macros.get_mut(key).unwrap();
             self.macro_keys.insert(key, mac.name.clone());
             self.macro_strs.push(mac.name.clone());
+        }
+    }
+
+    /// Automatically saves the current macro to config and updates the app state
+    /// This should be called whenever the current macro is modified
+    fn auto_save_current_macro(&mut self) {
+        if let Some(selected) = self.macro_selected {
+            if let Some(mac) = &self.current_macro {
+                match self.config.get::<Vec<Macro>>("macros") {
+                    Ok(mut macros) => {
+                        if selected < macros.len() {
+                            macros[selected] = mac.clone();
+                            match self.config.set("macros", macros) {
+                                Ok(_) => self.update_macros(),
+                                Err(err) => warn!("Couldn't set macros config: {}", err)
+                            }
+                        } else {
+                            warn!("Selected macro index out of bounds: {}", selected);
+                        }
+                    },
+                    Err(err) => warn!("Failed to get macros config: {}", err)
+                }
+            }
         }
     }
 }
@@ -174,9 +203,64 @@ impl cosmic::Application for App {
         }
 
         app.update_macros();
-        //app.macros = Some(macros.iter().map(|x| x.name.clone()).collect::<Vec<String>>());
+
+        // Restore the previously selected macro from config
+        if let Ok(selected_index) = app.config.get::<Option<usize>>("selected_macro") {
+            if let Some(index) = selected_index {
+                // Validate that the index is still valid after loading macros
+                if let Ok(macros) = app.config.get::<Vec<Macro>>("macros") {
+                    if index < macros.len() {
+                        app.update_macro(Some(index));
+                    } else {
+                        // Index is out of bounds, clear the selection
+                        app.update_macro(None);
+                    }
+                }
+            }
+        }
 
         let command = app.update_title();
+
+        let shortcuts = block_on(GlobalShortcuts::new()).unwrap();
+        let session = block_on(shortcuts.create_session()).unwrap();
+
+        // --- bind a "run_macro" shortcut and listen for activations ---
+        let run_macro_sc = NewShortcut::new("run_macro", "Run Current Macro")
+            .preferred_trigger(Some("<Ctrl><Alt>M"));
+        block_on(shortcuts.bind_shortcuts(&session, &[run_macro_sc], None)).unwrap();
+
+        let mut activations = block_on(shortcuts.receive_activated()).unwrap();
+        let enigo_clone = Arc::clone(&app.enigo);
+        let config_clone = app.config.clone();
+        tokio::spawn(async move {
+            while let Some(evt) = activations.next().await {
+                if evt.shortcut_id() == "run_macro" {
+                    println!("Global shortcut activated: run_macro");
+                    // Get the selected macro index from config
+                    if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
+                        if let Some(index) = selected_index {
+                            if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
+                                if let Some(mac) = macros.get(index) {
+                                    let enigo = Arc::clone(&enigo_clone);
+                                    let mac = mac.clone();
+
+                                    // Run the macro in a separate thread
+                                    tokio::task::spawn_blocking(move || {
+                                        println!("Running macro via global shortcut: {}", mac.name);
+                                        run_macro(mac, enigo);
+                                        println!("Macro complete.");
+                                    });
+                                } else {
+                                    println!("No macro found at index {}", index);
+                                }
+                            }
+                        } else {
+                            println!("No macro currently selected for global shortcut");
+                        }
+                    }
+                }
+            }
+        });
 
         (app, command)
     }
@@ -198,6 +282,7 @@ impl cosmic::Application for App {
             SetTitle(title) => {
                 if let Some(mac) = &mut self.current_macro {
                     mac.name = title;
+                    self.auto_save_current_macro();
                 }
             }
             SelectMacro(selected) => {
@@ -231,12 +316,14 @@ impl cosmic::Application for App {
             AddInstruction(index, instruction) => {
                 if let Some(mac) = &mut self.current_macro {
                     mac.code.insert(index, instruction);
+                    self.auto_save_current_macro();
                 }
             }
             EditInstruction(index, instruction) => {
                 if let Some(mac) = &mut self.current_macro {
                     if mac.code.len() > 0 {
                         mac.code[index] = instruction;
+                        self.auto_save_current_macro();
                     }
                 }
             }
@@ -244,6 +331,7 @@ impl cosmic::Application for App {
                 if let Some(mac) = &mut self.current_macro {
                     if mac.code.len() > 0 && index >= 0 {
                         mac.code.remove(index as usize);
+                        self.auto_save_current_macro();
                     }
                 }
             }
@@ -262,6 +350,7 @@ impl cosmic::Application for App {
                         if new_index != index {
                             // Swap the instructions
                             mac.code.swap(index, new_index);
+                            self.auto_save_current_macro();
                         }
                     }
                 }
@@ -269,6 +358,7 @@ impl cosmic::Application for App {
             ClearInstructions => {
                 if let Some(mac) = &mut self.current_macro {
                     mac.code.clear();
+                    self.auto_save_current_macro();
                 }
             }
             SaveMacro => {

@@ -10,10 +10,11 @@ tracing-subscriber = "0.3.19"
 serde = { version = "1.0.219", features = ["derive"] }
 enigo = { version = "0.5.0", features = ["serde", "x11rb"] }
 slotmap = { version = "1.0.7", features = ["serde"] }
+tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "50367b9"
+rev = "562e885"
 version = "0.1.0"
 default-features = false
 features = [
