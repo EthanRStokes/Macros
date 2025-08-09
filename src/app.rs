@@ -1,7 +1,8 @@
 use crate::app::Message::*;
 use crate::macros::{Instruction, Macro};
-use crate::util::{add_macro, button_to_string, key_to_string, string_to_button, string_to_key, ThreadPool};
+use crate::util::{add_macro, key_to_string, string_to_key, ThreadPool};
 use crate::util::{get_macro, run_macro};
+use crate::util::{get_mouse_button_names, mouse_button_to_index, index_to_mouse_button};
 use crate::util::{config, thread, loop_control};
 use tracing::warn;
 use cosmic::app::{Core, Task};
@@ -562,13 +563,11 @@ impl cosmic::Application for App {
                                 widget::text::body(format!("Raw: {:?}", keycode)).into()
                             }
                             Token::Button(button, direction) => {
-                                let button_str = button_to_string(&button).unwrap_or_default();
                                 row![
                                     widget::text::body("Button:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("", button_str)
-                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Button(string_to_button(x.as_str()).unwrap_or(button), direction.clone())))),
+                                    widget::dropdown(get_mouse_button_names(), Some(mouse_button_to_index(&button)), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(index_to_mouse_button(x), direction.clone())))),
                                     widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(button, if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release })))),
-                                ].spacing(10).into()
+                                ].spacing(10).width(Length::Fill).into()
                                 //widget::text::body(format!("Button: {:?}", button)).into()
                             }
                             Token::MoveMouse(x, y, coordinate) => {

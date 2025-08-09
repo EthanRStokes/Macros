@@ -301,33 +301,47 @@ pub(crate) fn key_to_string(key: &EnigoKey) -> Result<&'static str, &'static str
     }
 }
 
-pub(crate) fn string_to_button(button_str: &str) -> Result<EnigoButton, &'static str> {
-    match button_str {
-        "Left" => Ok(EnigoButton::Left),
-        "Right" => Ok(EnigoButton::Right),
-        "Middle" => Ok(EnigoButton::Middle),
-        "Back" => Ok(EnigoButton::Back),
-        "Forward" => Ok(EnigoButton::Forward),
-        "ScrollUp" => Ok(EnigoButton::ScrollUp),
-        "ScrollDown" => Ok(EnigoButton::ScrollDown),
-        "ScrollLeft" => Ok(EnigoButton::ScrollLeft),
-        "ScrollRight" => Ok(EnigoButton::ScrollRight),
-        _ => Err("Unknown button string"),
+pub(crate) fn get_mouse_button_names() -> &'static [&'static str] {
+    &[
+        "Left",
+        "Right",
+        "Middle",
+        "Back",
+        "Forward",
+        "ScrollUp",
+        "ScrollDown",
+        "ScrollLeft",
+        "ScrollRight",
+    ]
+}
+
+pub(crate) fn mouse_button_to_index(button: &EnigoButton) -> usize {
+    match button {
+        EnigoButton::Left => 0,
+        EnigoButton::Right => 1,
+        EnigoButton::Middle => 2,
+        EnigoButton::Back => 3,
+        EnigoButton::Forward => 4,
+        EnigoButton::ScrollUp => 5,
+        EnigoButton::ScrollDown => 6,
+        EnigoButton::ScrollLeft => 7,
+        EnigoButton::ScrollRight => 8,
+        _ => 0, // Default to Left
     }
 }
 
-pub(crate) fn button_to_string(button: &EnigoButton) -> Result<&'static str, &'static str> {
-    match button {
-        EnigoButton::Left => Ok("Left"),
-        EnigoButton::Right => Ok("Right"),
-        EnigoButton::Middle => Ok("Middle"),
-        EnigoButton::Back => Ok("Back"),
-        EnigoButton::Forward => Ok("Forward"),
-        EnigoButton::ScrollUp => Ok("ScrollUp"),
-        EnigoButton::ScrollDown => Ok("ScrollDown"),
-        EnigoButton::ScrollLeft => Ok("ScrollLeft"),
-        EnigoButton::ScrollRight => Ok("ScrollRight"),
-        _ => Err("Unknown button"),
+pub(crate) fn index_to_mouse_button(index: usize) -> EnigoButton {
+    match index {
+        0 => EnigoButton::Left,
+        1 => EnigoButton::Right,
+        2 => EnigoButton::Middle,
+        3 => EnigoButton::Back,
+        4 => EnigoButton::Forward,
+        5 => EnigoButton::ScrollUp,
+        6 => EnigoButton::ScrollDown,
+        7 => EnigoButton::ScrollLeft,
+        8 => EnigoButton::ScrollRight,
+        _ => EnigoButton::Left, // Default fallback
     }
 }
 
@@ -401,7 +415,7 @@ pub(crate) mod thread {
     {
         let thread_num = thread_pool.workers.len();
         let thread_name = format!("macro_thread_{}: {}", thread_num, name);
-        
+
         match thread::Builder::new().name(thread_name).spawn(task) {
             Ok(thread) => {
                 thread_pool.add_worker(thread);
@@ -477,7 +491,7 @@ pub(crate) mod instruction_utils {
     pub(crate) fn get_instruction_type_names() -> &'static [&'static str] {
         &[
             "Wait",
-            "Text", 
+            "Text",
             "Key",
             "Mouse Button",
             "Move Mouse",
