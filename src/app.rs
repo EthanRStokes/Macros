@@ -26,8 +26,8 @@ const DEFAULT_WAIT_TIME: u64 = 1000;
 const DEFAULT_SCROLL_AMOUNT: i32 = 4;
 
 // Constants for icon paths
-const ICON_ADD: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-add.svg";
-const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/bqm-remove.svg";
+const ICON_ADD: &str = "/usr/share/icons/breeze-dark/actions/16/list-add.svg";
+const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/edit-delete.svg";
 const ICON_UP: &str = "/usr/share/icons/breeze-dark/actions/16/go-up.svg";
 const ICON_DOWN: &str = "/usr/share/icons/breeze-dark/actions/16/go-down.svg";
 
@@ -564,11 +564,11 @@ impl cosmic::Application for App {
                             }
                             Token::Button(button, direction) => {
                                 row![
-                                    widget::text::body("Button:".to_string()).align_y(Alignment::Center),
+                                    widget::text::body("Mouse:".to_string()).align_y(Alignment::Center),
                                     widget::dropdown(get_mouse_button_names(), Some(mouse_button_to_index(&button)), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(index_to_mouse_button(x), direction.clone())))),
                                     widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(button, if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release })))),
                                 ].spacing(10).width(Length::Fill).into()
-                                //widget::text::body(format!("Button: {:?}", button)).into()
+                                //widget::text::body(format!("Mouse: {:?}", button)).into()
                             }
                             Token::MoveMouse(x, y, coordinate) => {
                                 row![
@@ -595,7 +595,7 @@ impl cosmic::Application for App {
                     }
                     Instruction::Wait(duration) => {
                         row![
-                            widget::text::body("Wait:".to_string()).align_y(Alignment::Center),
+                            widget::text::body("Wait (ms):".to_string()).align_y(Alignment::Center),
                             widget::text_input("", duration.to_string())
                                 .on_input(move |x| EditInstruction(index, Instruction::Wait(x.parse().unwrap_or(duration)))),
                         ].spacing(10).into()
