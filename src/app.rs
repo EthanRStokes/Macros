@@ -10,7 +10,7 @@ use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use cosmic::iced::{Alignment, Length};
 use cosmic::iced_widget::{button, column, row, scrollable, tooltip};
 use cosmic::widget::button::text;
-use cosmic::widget::{container, nav_bar};
+use cosmic::widget::container;
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
@@ -30,26 +30,6 @@ const ICON_ADD: &str = "/usr/share/icons/breeze-dark/actions/16/list-add.svg";
 const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/edit-delete.svg";
 const ICON_UP: &str = "/usr/share/icons/breeze-dark/actions/16/go-up.svg";
 const ICON_DOWN: &str = "/usr/share/icons/breeze-dark/actions/16/go-down.svg";
-
-#[derive(Clone, Copy)]
-pub(crate) enum Page {
-    Page1,
-    //Page2,
-    //Page3,
-    //Page4,
-}
-
-impl Page {
-    /// Page titles
-    const fn as_str(self) -> &'static str {
-        match self {
-            Page::Page1 => "Macros",
-            //Page::Page2 => "Page 2",
-            //Page::Page3 => "Page 3",
-            //Page::Page4 => "Page 4",
-        }
-    }
-}
 
 /// Messages that are used specifically by our [`App`].
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,7 +54,6 @@ pub(crate) enum Message {
 pub(crate) struct App {
     /// COSMIC app settings
     core: Core,
-    nav_model: nav_bar::Model,
     macro_selected: Option<usize>,
     current_macro: Option<Macro>,
     /// The application config
@@ -149,7 +128,7 @@ impl cosmic::Application for App {
     type Executor = executor::Default;
 
     /// Argument received [`cosmic::Application::new`].
-    type Flags = Vec<(Page, String)>;
+    type Flags = ();
 
     /// Message type specific to our [`App`].
     type Message = Message;
@@ -166,18 +145,9 @@ impl cosmic::Application for App {
     }
 
     /// Creates the application, and optionally emits command on initialize.
-    fn init(core: Core, input: Self::Flags) -> (Self, Task<Self::Message>) {
-        let mut nav_model = nav_bar::Model::default();
-
-        for (title, content) in input {
-            nav_model.insert().text(title.as_str()).data(content);
-        }
-
-        nav_model.activate_position(0);
-
+    fn init(core: Core, _input: Self::Flags) -> (Self, Task<Self::Message>) {
         let mut app = App {
             core,
-            nav_model,
             macro_selected: None,
             current_macro: None,
             config: Config::new(Self::APP_ID, 1).unwrap(),
@@ -331,17 +301,6 @@ impl cosmic::Application for App {
         (app, command)
     }
 
-    /// Allows COSMIC to integrate with your application's [`nav_bar::Model`].
-    fn nav_model(&self) -> Option<&nav_bar::Model> {
-        Some(&self.nav_model)
-    }
-
-    /// Called when a navigation item is selected.
-    fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Self::Message> {
-        self.nav_model.activate(id);
-        self.update_title()
-    }
-
     /// Handle application events here.
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         match message {
@@ -483,53 +442,61 @@ impl cosmic::Application for App {
 
     /// Creates a view after each update.
     fn view(&'_ self) -> Element<'_, Self::Message> {
-        // The string associated with the page. Ex: "Manage macro"
-        let page_content = self
-            .nav_model
-            .active_data::<String>()
-            .map_or("No page selected", String::as_str);
-
-        let page_text = cosmic::widget::text(page_content);
-
         let spacing = cosmic::theme::active().cosmic().spacing;
+        let has_selected_macro = self.current_macro.is_some();
 
-        let mut content = column![
-            page_text
-        ];
+        let run_macro_button = if has_selected_macro {
+            button("Run macro").on_press(RunMacro)
+        } else {
+            button("Run macro")
+        };
 
-        content = content.push(row![
+        let remove_macro_button = if has_selected_macro {
+            widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE))).on_press(RemoveMacro)
+        } else {
+            widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE)))
+        };
+
+        let mut content = column![];
+
+        content = content.push(column![
+            row![
             column![
                 cosmic::widget::text("Select macro"),
                 cosmic::widget::dropdown(&self.macro_strs, self.macro_selected, |x: usize| SelectMacro(x))
             ],
-            column![
+            row![
                 tooltip(
-                    button("Run macro")
-                        .on_press(RunMacro),
+                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_ADD)))
+                        .on_press(NewMacro),
+                    container("Add a new macro"),
+                    tooltip::Position::Right
+                ),
+                tooltip(
+                    remove_macro_button,
+                    container("Remove the selected macro"),
+                    tooltip::Position::Right
+                )
+            ].spacing(8)
+        ].spacing(16),
+            row![
+                tooltip(
+                    run_macro_button,
                     container("Runs the current macro once or starts looping if enabled"),
                     tooltip::Position::Right
                 ),
                 tooltip(
-                    cosmic::widget::checkbox(self.loop_mode_enabled)
-                        .name("Loop mode")
-                        .on_toggle(ToggleLoopMode),
+                    row![
+                        cosmic::widget::text("Loop mode"),
+                        cosmic::widget::checkbox(self.loop_mode_enabled)
+                            .name("Loop mode")
+                            .on_toggle(ToggleLoopMode),
+                    ].spacing(8),
                     container("Enable to loop the macro continuously"),
                     tooltip::Position::Right
                 )
-            ],
-            tooltip(
-                widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_ADD)))
-                    .on_press(NewMacro),
-                container("Add a new macro"),
-                tooltip::Position::Right
-            ),
-            tooltip(
-                widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE)))
-                    .on_press(RemoveMacro),
-                container("Remove the selected macro"),
-                tooltip::Position::Right
-            )
-        ].spacing(50).padding([0, 0, 0, 0]));
+            ].spacing(16)
+        ].spacing(12));
 
         if let Some(mac) = &self.current_macro {
             content = content.push(column![
@@ -724,14 +691,8 @@ impl cosmic::Application for App {
 }
 
 impl App where Self: cosmic::Application, {
-    fn active_page_title(&mut self) -> &str {
-        self.nav_model
-            .text(self.nav_model.active())
-            .unwrap_or("Unknown Page")
-    }
-
     fn update_title(&mut self) -> Task<Message> {
-        let header_title: String = format!("{} — Macros", self.active_page_title().to_owned());
+        let header_title: String = "Macros".to_string();
         let window_title = header_title.clone();
         self.set_header_title(header_title);
         if let Some(id) = self.core.main_window_id() {
