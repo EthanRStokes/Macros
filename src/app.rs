@@ -80,7 +80,7 @@ pub(crate) struct App {
     /// The application config
     pub(crate) config: Config,
     /// Enigo is an API for mouse and keyboard control
-    enigo: Arc<Mutex<Enigo>>,
+    enigo: Arc<Mutex<Enigo<'static>>>,
     thread_pool: ThreadPool,
     macros: SlotMap<DefaultKey, Macro>,
     macro_keys: SecondaryMap<DefaultKey, String>,
@@ -510,7 +510,8 @@ impl cosmic::Application for App {
                     tooltip::Position::Right
                 ),
                 tooltip(
-                    cosmic::widget::checkbox("Loop mode", self.loop_mode_enabled)
+                    cosmic::widget::checkbox(self.loop_mode_enabled)
+                        .name("Loop mode")
                         .on_toggle(ToggleLoopMode),
                     container("Enable to loop the macro continuously"),
                     tooltip::Position::Right

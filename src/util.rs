@@ -82,7 +82,7 @@ pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
     }
 }
 
-pub fn make_enigo() -> Enigo {
+pub fn make_enigo() -> Enigo<'static> {
     Enigo::new(&enigo::Settings::default()).unwrap()
 }
 
@@ -432,7 +432,7 @@ pub(crate) mod thread {
 
     pub(crate) fn create_loop_task(
         mac: Macro,
-        enigo: Arc<Mutex<Enigo>>,
+        enigo: Arc<Mutex<Enigo<'static>>>,
         loop_flag: Arc<Mutex<bool>>,
     ) -> impl FnOnce() + Send + 'static {
         move || {
@@ -459,7 +459,7 @@ pub(crate) mod thread {
 
     pub(crate) fn create_single_run_task(
         mac: Macro,
-        enigo: Arc<Mutex<Enigo>>,
+        enigo: Arc<Mutex<Enigo<'static>>>,
     ) -> impl FnOnce() + Send + 'static {
         move || {
             println!("Running macro: {}", mac.name);

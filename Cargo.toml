@@ -2,19 +2,24 @@
 name = "macros"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.94.0"
 
 [dependencies]
 tracing = "0.1.41"
 tracing-log = "0.2.0"
-tracing-subscriber = "0.3.20"
+tracing-subscriber = "0.3.23"
 serde = { version = "1.0.228", features = ["derive"] }
-enigo = { version = "0.6.1", features = ["serde", "x11rb"] }
+enigo = {
+    git = "https://github.com/enigo-rs/enigo.git",
+    rev = "6f311ea",
+    features = ["serde", "x11rb", "wayland"]
+}
 slotmap = { version = "1.0.7", features = ["serde"] }
-tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.50.0", features = ["rt", "rt-multi-thread", "macros"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "30a02ec"
+rev = "c52ef97"
 version = "1.0.0"
 default-features = false
 features = [
