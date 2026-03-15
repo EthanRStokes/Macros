@@ -9,7 +9,6 @@ use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
 use cosmic::iced::{Alignment, Length};
 use cosmic::iced_widget::{button, column, row, scrollable, tooltip};
-use cosmic::widget::button::text;
 use cosmic::widget::container;
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
@@ -445,16 +444,44 @@ impl cosmic::Application for App {
         let spacing = cosmic::theme::active().cosmic().spacing;
         let has_selected_macro = self.current_macro.is_some();
 
-        let run_macro_button = if has_selected_macro {
-            button("Run macro").on_press(RunMacro)
-        } else {
-            button("Run macro")
+        let pill_button = |label: &'static str| {
+            button(cosmic::widget::text(label)).padding([10, 18])
         };
 
-        let remove_macro_button = if has_selected_macro {
-            widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE))).on_press(RemoveMacro)
+        let symbol_label_button = |symbol: &'static str, label: &'static str| {
+            button(
+                row![
+                    cosmic::widget::text(symbol),
+                    cosmic::widget::text(label),
+                ]
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 14])
+        };
+
+        let compact_icon_button = |icon_path: &'static str| {
+            widget::button::icon(widget::icon::from_path(PathBuf::from(icon_path))).padding(8)
+        };
+
+        let run_macro_label = if self.loop_mode_enabled {
+            "⟲ Start loop"
         } else {
-            widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE)))
+            "▶ Run macro"
+        };
+
+        let run_macro_button = if has_selected_macro {
+            pill_button(run_macro_label).on_press(RunMacro)
+        } else {
+            pill_button(run_macro_label)
+        };
+
+        let new_macro_button = symbol_label_button("＋", "New macro").on_press(NewMacro);
+
+        let remove_macro_button = if has_selected_macro {
+            symbol_label_button("🗑", "Remove macro").on_press(RemoveMacro)
+        } else {
+            symbol_label_button("🗑", "Remove macro")
         };
 
         let mut content = column![];
@@ -467,8 +494,7 @@ impl cosmic::Application for App {
             ],
             row![
                 tooltip(
-                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_ADD)))
-                        .on_press(NewMacro),
+                    new_macro_button,
                     container("Add a new macro"),
                     tooltip::Position::Right
                 ),
@@ -477,8 +503,8 @@ impl cosmic::Application for App {
                     container("Remove the selected macro"),
                     tooltip::Position::Right
                 )
-            ].spacing(8)
-        ].spacing(16),
+            ].spacing(12).align_y(Alignment::Center)
+        ].spacing(16).align_y(Alignment::Center),
             row![
                 tooltip(
                     run_macro_button,
@@ -491,20 +517,30 @@ impl cosmic::Application for App {
                         cosmic::widget::checkbox(self.loop_mode_enabled)
                             .name("Loop mode")
                             .on_toggle(ToggleLoopMode),
-                    ].spacing(8),
+                    ].spacing(8).align_y(Alignment::Center),
                     container("Enable to loop the macro continuously"),
                     tooltip::Position::Right
                 )
-            ].spacing(16)
+            ].spacing(16).align_y(Alignment::Center)
         ].spacing(12));
 
         if let Some(mac) = &self.current_macro {
-            content = content.push(column![
-                text("Clear instructions")
-                    .on_press(ClearInstructions),
-                text("Save macro")
-                    .on_press(SaveMacro),
-            ]);
+            content = content.push(
+                row![
+                    tooltip(
+                        pill_button("↺ Clear instructions").on_press(ClearInstructions),
+                        container("Remove every instruction from the current macro"),
+                        tooltip::Position::Top
+                    ),
+                    tooltip(
+                        pill_button("💾 Save macro").on_press(SaveMacro),
+                        container("Persist the current macro to your config"),
+                        tooltip::Position::Top
+                    ),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+            );
 
             let mut instructions: Vec<Element<Message>> = vec![];
 
@@ -582,20 +618,24 @@ impl cosmic::Application for App {
                     instruction,
                     // Up button
                     tooltip(
-                        widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_UP)))
+                        compact_icon_button(ICON_UP)
                             .on_press(ReorderInstruction(index, -1)),
                         container("Move up"),
                         tooltip::Position::Top
                     ),
                     // Down button
                     tooltip(
-                        widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_DOWN)))
+                        compact_icon_button(ICON_DOWN)
                             .on_press(ReorderInstruction(index, 1)),
                         container("Move down"),
                         tooltip::Position::Bottom
                     ),
-                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE)))
-                        .on_press(RemoveInstruction(index as isize)),
+                    tooltip(
+                        compact_icon_button(ICON_REMOVE)
+                            .on_press(RemoveInstruction(index as isize)),
+                        container("Remove instruction"),
+                        tooltip::Position::Left
+                    ),
                     cosmic::widget::dropdown(
                         &[
                             "Wait",
@@ -618,7 +658,10 @@ impl cosmic::Application for App {
                             _ => unreachable!(),
                         },
                     )
-                ].into();
+                ]
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center)
+                .into();
 
                 instructions.push(instruction);
             }
