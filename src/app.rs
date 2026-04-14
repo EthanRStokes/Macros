@@ -26,10 +26,10 @@ const DEFAULT_WAIT_TIME: u64 = 1000;
 const DEFAULT_SCROLL_AMOUNT: i32 = 4;
 const CLEAR_CONFIRM_TIMEOUT_SECS: u64 = 5;
 
-// Constants for icon paths
-const ICON_REMOVE: &str = "/usr/share/icons/breeze-dark/actions/16/edit-delete.svg";
-const ICON_UP: &str = "/usr/share/icons/breeze-dark/actions/16/go-up.svg";
-const ICON_DOWN: &str = "/usr/share/icons/breeze-dark/actions/16/go-down.svg";
+// Constants for bundled icon paths
+const ICON_REMOVE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/icons/remove.svg");
+const ICON_UP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/icons/up.svg");
+const ICON_DOWN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/icons/down.svg");
 
 /// Messages that are used specifically by our [`App`].
 #[derive(Clone, Debug, Eq, PartialEq)]
