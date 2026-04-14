@@ -7,7 +7,7 @@ use crate::util::{config, thread, loop_control};
 use tracing::warn;
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
-use cosmic::iced::{Alignment, Length};
+use cosmic::iced::{Alignment, Length, Subscription};
 use cosmic::widget::{column, container, row, scrollable, tooltip};
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
@@ -18,8 +18,12 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use cosmic::dialog::ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use cosmic::iced::futures::executor::block_on;
-use cosmic::iced::futures::StreamExt;
+use cosmic::iced::futures::{SinkExt, Stream, StreamExt};
+use cosmic::iced::futures::channel::mpsc::Sender;
+use cosmic::iced::stream::channel;
 use cosmic::iced::widget::button;
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 
 // Constants for default values
 const DEFAULT_WAIT_TIME: u64 = 1000;
@@ -49,6 +53,7 @@ pub(crate) enum Message {
     SaveMacro,
     NewMacro,
     RemoveMacro,
+    GlobalHotkeyEvent(GlobalHotKeyEvent)
 }
 
 /// The [`App`] stores application-specific state.
@@ -75,6 +80,12 @@ pub(crate) struct App {
     confirm_clear_instructions: bool,
     /// Generation counter used to ignore stale clear-confirm timeout tasks
     clear_confirm_generation: u64,
+    #[cfg(not(target_os = "linux"))]
+    manager: GlobalHotKeyManager,
+    #[cfg(not(target_os = "linux"))]
+    run_macro_id: u32,
+    #[cfg(not(target_os = "linux"))]
+    stop_loop_id: u32,
 }
 
 impl App {
@@ -133,6 +144,22 @@ fn add_default_config(config: &Config) {
     add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![]));
 }
 
+fn hotkey_sub() -> impl Stream<Item = Message> {
+    channel(32, |mut sender: Sender<Message>| async move {
+        let receiver = GlobalHotKeyEvent::receiver();
+        // poll for global hotkey events every 50ms
+        loop {
+            if let Ok(event) = receiver.try_recv() {
+                sender
+                    .send(Message::GlobalHotkeyEvent(event))
+                    .await
+                    .unwrap();
+            }
+            async_std::task::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+}
+
 /// Implement [`cosmic::Application`] to integrate with COSMIC.
 impl cosmic::Application for App {
     /// Default async executor to use with the app.
@@ -157,6 +184,19 @@ impl cosmic::Application for App {
 
     /// Creates the application, and optionally emits command on initialize.
     fn init(core: Core, _input: Self::Flags) -> (Self, Task<Self::Message>) {
+        #[cfg(not(target_os = "linux"))]
+        let (manager, run_macro_id, stop_loop_id) = {
+            let manager = GlobalHotKeyManager::new().unwrap();
+            let run_macro_hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::F6);
+            let stop_loop_hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::F7);
+            let run_macro_id = run_macro_hotkey.id();
+            let stop_loop_id = stop_loop_hotkey.id();
+
+            manager.register(run_macro_hotkey).expect("Failed to register 'start' keybind");
+            manager.register(stop_loop_hotkey).expect("Failed to register 'stop' keybind");
+            (manager, run_macro_id, stop_loop_id)
+        };
+
         let mut app = App {
             core,
             macro_selected: None,
@@ -172,6 +212,12 @@ impl cosmic::Application for App {
             confirm_remove_macro: false,
             confirm_clear_instructions: false,
             clear_confirm_generation: 0,
+            #[cfg(not(target_os = "linux"))]
+            manager,
+            #[cfg(not(target_os = "linux"))]
+            run_macro_id,
+            #[cfg(not(target_os = "linux"))]
+            stop_loop_id,
         };
 
         let config = &app.config;
@@ -316,6 +362,10 @@ impl cosmic::Application for App {
         }
 
         (app, command)
+    }
+
+    fn subscription(&self) -> Subscription<Self::Message> {
+        Subscription::run(hotkey_sub)
     }
 
     /// Handle application events here.
@@ -478,6 +528,87 @@ impl cosmic::Application for App {
                 if let Err(err) = config::save_config_value(&self.config, "loop_mode_enabled", enabled) {
                     warn!("Failed to save loop mode setting: {}", err);
                 }
+            }
+            GlobalHotkeyEvent(event) => {
+                println!("{:?}", event);
+                let enigo_clone = Arc::clone(&self.enigo);
+                let config_clone = self.config.clone();
+                let is_looping_clone = Arc::clone(&self.is_looping);
+                let run_macro_id = self.run_macro_id.clone();
+                let stop_loop_id = self.stop_loop_id.clone();
+                tokio::spawn(async move {
+                    println!("{:?}", event);
+                    let id = event.id;
+                    if id == run_macro_id {
+                        println!("Global shortcut activated: run_macro");
+
+                        // Check if loop mode is enabled
+                        let loop_mode_enabled = config_clone.get::<bool>("loop_mode_enabled").unwrap_or(false);
+
+                        // Check if already looping
+                        let currently_looping = if let Ok(is_looping) = is_looping_clone.lock() {
+                            *is_looping
+                        } else {
+                            false
+                        };
+
+                        if loop_mode_enabled && currently_looping {
+                            // Already looping, ignore the request
+                            println!("Macro is already looping, ignoring run request");
+                            return;
+                        }
+
+                        // Get the selected macro index from config
+                        if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
+                            if let Some(index) = selected_index {
+                                if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
+                                    if let Some(mac) = macros.get(index) {
+                                        let enigo = Arc::clone(&enigo_clone);
+                                        let mac = mac.clone();
+
+                                        if loop_mode_enabled {
+                                            // Start looping
+                                            if let Ok(mut is_looping) = is_looping_clone.lock() {
+                                                *is_looping = true;
+                                            }
+
+                                            let loop_flag = Arc::clone(&is_looping_clone);
+
+                                            tokio::task::spawn_blocking(move || {
+                                                println!("Starting macro loop via global shortcut: {}", mac.name);
+                                                loop {
+                                                    // Check if we should stop looping
+                                                    if let Ok(should_continue) = loop_flag.lock() {
+                                                        if !*should_continue {
+                                                            break;
+                                                        }
+                                                    } else {
+                                                        warn!("Failed to lock loop flag, stopping loop");
+                                                        break;
+                                                    }
+
+                                                    run_macro(mac.clone(), Arc::clone(&enigo));
+                                                }
+                                                println!("Macro loop stopped via global shortcut.");
+                                            });
+                                        } else {
+                                            // Run the macro once in a separate thread
+                                            tokio::task::spawn_blocking(move || {
+                                                println!("Running macro via global shortcut: {}", mac.name);
+                                                run_macro(mac, enigo);
+                                                println!("Macro complete.");
+                                            });
+                                        }
+                                    } else {
+                                        println!("No macro found at index {}", index);
+                                    }
+                                }
+                            } else {
+                                println!("No macro currently selected for global shortcut");
+                            }
+                        }
+                    } else if id == stop_loop_id {}
+                });
             }
         }
         Task::none()

@@ -16,6 +16,8 @@ enigo = {
 }
 slotmap = { version = "1.0.7", features = ["serde"] }
 tokio = { version = "1.50.0", features = ["rt", "rt-multi-thread", "macros"] }
+global-hotkey = "0.7.0"
+async-std = "1.13.2"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
