@@ -165,6 +165,7 @@ pub(crate) fn string_to_key(key_str: &str) -> Result<EnigoKey, &'static str> {
         "PageUp" => Ok(EnigoKey::PageUp),
         "PageDown" => Ok(EnigoKey::PageDown),
         "Numlock" => Ok(EnigoKey::Numlock),
+        #[cfg(all(unix, not(target_os = "macos")))]
         "ScrollLock" => Ok(EnigoKey::ScrollLock),
         "Pause" => Ok(EnigoKey::Pause),
         "PrintScr" => Ok(EnigoKey::PrintScr),
@@ -257,6 +258,7 @@ pub(crate) fn key_to_string(key: &EnigoKey) -> Result<&'static str, &'static str
         EnigoKey::PageUp => Ok("PageUp"),
         EnigoKey::PageDown => Ok("PageDown"),
         EnigoKey::Numlock => Ok("Numlock"),
+        #[cfg(all(unix, not(target_os = "macos")))]
         EnigoKey::ScrollLock => Ok("ScrollLock"),
         EnigoKey::Pause => Ok("Pause"),
         EnigoKey::PrintScr => Ok("PrintScr"),

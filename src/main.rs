@@ -3,7 +3,7 @@ mod util;
 mod app;
 
 use cosmic::app::Settings;
-use cosmic::iced_core::Size;
+use cosmic::iced::Size;
 use app::App;
 
 /// Runs application with these settings

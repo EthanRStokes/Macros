@@ -19,21 +19,41 @@ tokio = { version = "1.50.0", features = ["rt", "rt-multi-thread", "macros"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "c52ef97"
+rev = "52116d2"
 version = "1.0.0"
 default-features = false
-features = [
-    "debug",
-    "winit",
-    "tokio",
-    "xdg-portal",
-    "dbus-config",
-    "a11y",
-    "wayland",
-    "wgpu",
-    "single-instance",
-    "multi-window",
-    "serde-keycode"
-]
+
+[target.'cfg(windows)'.dependencies]
+libcosmic = {
+    git = "https://github.com/pop-os/libcosmic.git",
+    rev = "52116d2",
+    version = "1.0.0",
+    default-features = false,
+    features = [
+        #"debug",
+        "winit",
+        "tokio",
+        "multi-window",
+        "serde-keycode"
+    ]
+}
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libcosmic = {
+    git = "https://github.com/pop-os/libcosmic.git",
+    rev = "52116d2",
+    version = "1.0.0",
+    default-features = false,
+    features = [
+        #"debug",
+        "winit",
+        "tokio",
+        "xdg-portal",
+        "dbus-config",
+        "a11y",
+        "multi-window",
+        "serde-keycode"
+    ]
+}
 
 [build-dependencies]
