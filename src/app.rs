@@ -22,8 +22,11 @@ use cosmic::iced::futures::{SinkExt, Stream, StreamExt};
 use cosmic::iced::futures::channel::mpsc::Sender;
 use cosmic::iced::stream::channel;
 use cosmic::iced::widget::button;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+#[cfg(not(target_os = "linux"))]
+use global_hotkey::{
+    GlobalHotKeyEvent, GlobalHotKeyManager,
+    hotkey::{Code, HotKey, Modifiers},
+};
 
 // Constants for default values
 const DEFAULT_WAIT_TIME: u64 = 1000;
@@ -53,6 +56,7 @@ pub(crate) enum Message {
     SaveMacro,
     NewMacro,
     RemoveMacro,
+    #[cfg(not(target_os = "linux"))]
     GlobalHotkeyEvent(GlobalHotKeyEvent)
 }
 
@@ -144,6 +148,7 @@ fn add_default_config(config: &Config) {
     add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![]));
 }
 
+#[cfg(not(target_os = "linux"))]
 fn hotkey_sub() -> impl Stream<Item = Message> {
     channel(32, |mut sender: Sender<Message>| async move {
         let receiver = GlobalHotKeyEvent::receiver();
@@ -364,6 +369,7 @@ impl cosmic::Application for App {
         (app, command)
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn subscription(&self) -> Subscription<Self::Message> {
         Subscription::run(hotkey_sub)
     }
@@ -529,6 +535,7 @@ impl cosmic::Application for App {
                     warn!("Failed to save loop mode setting: {}", err);
                 }
             }
+            #[cfg(not(target_os = "linux"))]
             GlobalHotkeyEvent(event) => {
                 println!("{:?}", event);
                 let enigo_clone = Arc::clone(&self.enigo);
