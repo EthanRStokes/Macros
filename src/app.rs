@@ -25,6 +25,7 @@ use cosmic::iced::widget::button;
 #[cfg(not(target_os = "linux"))]
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager,
+    HotKeyState,
     hotkey::{Code, HotKey, Modifiers},
 };
 
@@ -152,13 +153,15 @@ fn add_default_config(config: &Config) {
 fn hotkey_sub() -> impl Stream<Item = Message> {
     channel(32, |mut sender: Sender<Message>| async move {
         let receiver = GlobalHotKeyEvent::receiver();
-        // poll for global hotkey events every 50ms
+        // Poll for global hotkey events every 50ms and emit only key press events.
         loop {
             if let Ok(event) = receiver.try_recv() {
-                sender
-                    .send(Message::GlobalHotkeyEvent(event))
-                    .await
-                    .unwrap();
+                if event.state == HotKeyState::Pressed {
+                    sender
+                        .send(Message::GlobalHotkeyEvent(event))
+                        .await
+                        .unwrap();
+                }
             }
             async_std::task::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -537,6 +540,11 @@ impl cosmic::Application for App {
             }
             #[cfg(not(target_os = "linux"))]
             GlobalHotkeyEvent(event) => {
+                // Guard against duplicate release events.
+                if event.state != HotKeyState::Pressed {
+                    return Task::none();
+                }
+
                 println!("{:?}", event);
                 let enigo_clone = Arc::clone(&self.enigo);
                 let config_clone = self.config.clone();
@@ -614,7 +622,16 @@ impl cosmic::Application for App {
                                 println!("No macro currently selected for global shortcut");
                             }
                         }
-                    } else if id == stop_loop_id {}
+                    } else if id == stop_loop_id {
+                        println!("Global shortcut activated: stop_loop");
+                        // Set the looping flag to false to stop any running loops
+                        if let Ok(mut is_looping) = is_looping_clone.lock() {
+                            *is_looping = false;
+                            println!("Loop stop requested via global shortcut.");
+                        } else {
+                            println!("Failed to access loop flag.");
+                        }
+                    }
                 });
             }
         }
