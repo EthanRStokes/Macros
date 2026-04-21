@@ -33,6 +33,7 @@ use global_hotkey::{
 const DEFAULT_WAIT_TIME: u64 = 1000;
 const DEFAULT_SCROLL_AMOUNT: i32 = 4;
 const CLEAR_CONFIRM_TIMEOUT_SECS: u64 = 5;
+const LOOP_ITERATION_DELAY_MS: u64 = 1;
 
 // Constants for bundled icon paths
 const ICON_REMOVE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/res/icons/remove.svg");
@@ -147,6 +148,119 @@ impl App {
 
 fn add_default_config(config: &Config) {
     add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![]));
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GlobalShortcutAction {
+    RunMacro,
+    StopLoop,
+}
+
+fn spawn_global_shortcut_action(
+    action: GlobalShortcutAction,
+    config: Config,
+    enigo: Arc<Mutex<Enigo<'static>>>,
+    is_looping: Arc<Mutex<bool>>,
+) {
+    tokio::spawn(async move {
+        execute_global_shortcut_action(action, &config, &enigo, &is_looping);
+    });
+}
+
+fn execute_global_shortcut_action(
+    action: GlobalShortcutAction,
+    config: &Config,
+    enigo: &Arc<Mutex<Enigo<'static>>>,
+    is_looping: &Arc<Mutex<bool>>,
+) {
+    match action {
+        GlobalShortcutAction::RunMacro => run_selected_macro_from_shortcut(config, enigo, is_looping),
+        GlobalShortcutAction::StopLoop => stop_macro_loop_from_shortcut(is_looping),
+    }
+}
+
+fn run_selected_macro_from_shortcut(
+    config: &Config,
+    enigo: &Arc<Mutex<Enigo<'static>>>,
+    is_looping: &Arc<Mutex<bool>>,
+) {
+    println!("Global shortcut activated: run_macro");
+
+    let loop_mode_enabled = config.get::<bool>("loop_mode_enabled").unwrap_or(false);
+    let currently_looping = is_looping.lock().map(|state| *state).unwrap_or(false);
+
+    if loop_mode_enabled && currently_looping {
+        println!("Macro is already looping, ignoring run request");
+        return;
+    }
+
+    let selected_index = match config.get::<Option<usize>>("selected_macro") {
+        Ok(Some(index)) => index,
+        Ok(None) => {
+            println!("No macro currently selected for global shortcut");
+            return;
+        }
+        Err(err) => {
+            warn!("Failed to read selected macro for global shortcut: {}", err);
+            return;
+        }
+    };
+
+    let macros = match config.get::<Vec<Macro>>("macros") {
+        Ok(macros) => macros,
+        Err(err) => {
+            warn!("Failed to load macros for global shortcut: {}", err);
+            return;
+        }
+    };
+
+    let Some(mac) = macros.get(selected_index).cloned() else {
+        println!("No macro found at index {}", selected_index);
+        return;
+    };
+
+    let enigo = Arc::clone(enigo);
+
+    if loop_mode_enabled {
+        if let Ok(mut state) = is_looping.lock() {
+            *state = true;
+        }
+
+        let loop_flag = Arc::clone(is_looping);
+        tokio::task::spawn_blocking(move || {
+            println!("Starting macro loop via global shortcut: {}", mac.name);
+            loop {
+                if let Ok(should_continue) = loop_flag.lock() {
+                    if !*should_continue {
+                        break;
+                    }
+                } else {
+                    warn!("Failed to lock loop flag, stopping loop");
+                    break;
+                }
+
+                run_macro(mac.clone(), Arc::clone(&enigo));
+                std::thread::sleep(std::time::Duration::from_millis(LOOP_ITERATION_DELAY_MS));
+            }
+            println!("Macro loop stopped via global shortcut.");
+        });
+    } else {
+        tokio::task::spawn_blocking(move || {
+            println!("Running macro via global shortcut: {}", mac.name);
+            run_macro(mac, enigo);
+            println!("Macro complete.");
+        });
+    }
+}
+
+fn stop_macro_loop_from_shortcut(is_looping: &Arc<Mutex<bool>>) {
+    println!("Global shortcut activated: stop_loop");
+    if let Ok(mut state) = is_looping.lock() {
+        *state = false;
+        println!("Loop stop requested via global shortcut.");
+    } else {
+        println!("Failed to access loop flag.");
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -280,86 +394,20 @@ impl cosmic::Application for App {
                                 while let Some(evt) = activations.next().await {
                                     match evt.shortcut_id() {
                                         "run_macro" => {
-                                            println!("Global shortcut activated: run_macro");
-
-                                            // Check if loop mode is enabled
-                                            let loop_mode_enabled = config_clone.get::<bool>("loop_mode_enabled").unwrap_or(false);
-
-                                            // Check if already looping
-                                            let currently_looping = if let Ok(is_looping) = is_looping_clone.lock() {
-                                                *is_looping
-                                            } else {
-                                                false
-                                            };
-
-                                            if loop_mode_enabled && currently_looping {
-                                                // Already looping, ignore the request
-                                                println!("Macro is already looping, ignoring run request");
-                                                continue;
-                                            }
-
-                                            // Get the selected macro index from config
-                                            if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
-                                                if let Some(index) = selected_index {
-                                                    if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
-                                                        if let Some(mac) = macros.get(index) {
-                                                            let enigo = Arc::clone(&enigo_clone);
-                                                            let mac = mac.clone();
-
-                                                            if loop_mode_enabled {
-                                                                // Start looping
-                                                                if let Ok(mut is_looping) = is_looping_clone.lock() {
-                                                                    *is_looping = true;
-                                                                }
-
-                                                                let loop_flag = Arc::clone(&is_looping_clone);
-
-                                                                tokio::task::spawn_blocking(move || {
-                                                                    println!("Starting macro loop via global shortcut: {}", mac.name);
-                                                                    loop {
-                                                                        // Check if we should stop looping
-                                                                        if let Ok(should_continue) = loop_flag.lock() {
-                                                                            if !*should_continue {
-                                                                                break;
-                                                                            }
-                                                                        } else {
-                                                                            warn!("Failed to lock loop flag, stopping loop");
-                                                                            break;
-                                                                        }
-
-                                                                        run_macro(mac.clone(), Arc::clone(&enigo));
-
-                                                                        // Small delay between iterations to prevent overwhelming the system
-                                                                        std::thread::sleep(std::time::Duration::from_millis(1));
-                                                                    }
-                                                                    println!("Macro loop stopped via global shortcut.");
-                                                                });
-                                                            } else {
-                                                                // Run the macro once in a separate thread
-                                                                tokio::task::spawn_blocking(move || {
-                                                                    println!("Running macro via global shortcut: {}", mac.name);
-                                                                    run_macro(mac, enigo);
-                                                                    println!("Macro complete.");
-                                                                });
-                                                            }
-                                                        } else {
-                                                            println!("No macro found at index {}", index);
-                                                        }
-                                                    }
-                                                } else {
-                                                    println!("No macro currently selected for global shortcut");
-                                                }
-                                            }
+                                            spawn_global_shortcut_action(
+                                                GlobalShortcutAction::RunMacro,
+                                                config_clone.clone(),
+                                                Arc::clone(&enigo_clone),
+                                                Arc::clone(&is_looping_clone),
+                                            );
                                         }
                                         "stop_loop" => {
-                                            println!("Global shortcut activated: stop_loop");
-                                            // Set the looping flag to false to stop any running loops
-                                            if let Ok(mut is_looping) = is_looping_clone.lock() {
-                                                *is_looping = false;
-                                                println!("Loop stop requested via global shortcut.");
-                                            } else {
-                                                println!("Failed to access loop flag.");
-                                            }
+                                            spawn_global_shortcut_action(
+                                                GlobalShortcutAction::StopLoop,
+                                                config_clone.clone(),
+                                                Arc::clone(&enigo_clone),
+                                                Arc::clone(&is_looping_clone),
+                                            );
                                         }
                                         _ => {}
                                     }
@@ -556,93 +604,22 @@ impl cosmic::Application for App {
                 }
 
                 println!("{:?}", event);
-                let enigo_clone = Arc::clone(&self.enigo);
-                let config_clone = self.config.clone();
-                let is_looping_clone = Arc::clone(&self.is_looping);
-                let run_macro_id = self.run_macro_id.clone();
-                let stop_loop_id = self.stop_loop_id.clone();
-                tokio::spawn(async move {
-                    println!("{:?}", event);
-                    let id = event.id;
-                    if id == run_macro_id {
-                        println!("Global shortcut activated: run_macro");
+                let action = if event.id == self.run_macro_id {
+                    Some(GlobalShortcutAction::RunMacro)
+                } else if event.id == self.stop_loop_id {
+                    Some(GlobalShortcutAction::StopLoop)
+                } else {
+                    None
+                };
 
-                        // Check if loop mode is enabled
-                        let loop_mode_enabled = config_clone.get::<bool>("loop_mode_enabled").unwrap_or(false);
-
-                        // Check if already looping
-                        let currently_looping = if let Ok(is_looping) = is_looping_clone.lock() {
-                            *is_looping
-                        } else {
-                            false
-                        };
-
-                        if loop_mode_enabled && currently_looping {
-                            // Already looping, ignore the request
-                            println!("Macro is already looping, ignoring run request");
-                            return;
-                        }
-
-                        // Get the selected macro index from config
-                        if let Ok(selected_index) = config_clone.get::<Option<usize>>("selected_macro") {
-                            if let Some(index) = selected_index {
-                                if let Ok(macros) = config_clone.get::<Vec<Macro>>("macros") {
-                                    if let Some(mac) = macros.get(index) {
-                                        let enigo = Arc::clone(&enigo_clone);
-                                        let mac = mac.clone();
-
-                                        if loop_mode_enabled {
-                                            // Start looping
-                                            if let Ok(mut is_looping) = is_looping_clone.lock() {
-                                                *is_looping = true;
-                                            }
-
-                                            let loop_flag = Arc::clone(&is_looping_clone);
-
-                                            tokio::task::spawn_blocking(move || {
-                                                println!("Starting macro loop via global shortcut: {}", mac.name);
-                                                loop {
-                                                    // Check if we should stop looping
-                                                    if let Ok(should_continue) = loop_flag.lock() {
-                                                        if !*should_continue {
-                                                            break;
-                                                        }
-                                                    } else {
-                                                        warn!("Failed to lock loop flag, stopping loop");
-                                                        break;
-                                                    }
-
-                                                    run_macro(mac.clone(), Arc::clone(&enigo));
-                                                }
-                                                println!("Macro loop stopped via global shortcut.");
-                                            });
-                                        } else {
-                                            // Run the macro once in a separate thread
-                                            tokio::task::spawn_blocking(move || {
-                                                println!("Running macro via global shortcut: {}", mac.name);
-                                                run_macro(mac, enigo);
-                                                println!("Macro complete.");
-                                            });
-                                        }
-                                    } else {
-                                        println!("No macro found at index {}", index);
-                                    }
-                                }
-                            } else {
-                                println!("No macro currently selected for global shortcut");
-                            }
-                        }
-                    } else if id == stop_loop_id {
-                        println!("Global shortcut activated: stop_loop");
-                        // Set the looping flag to false to stop any running loops
-                        if let Ok(mut is_looping) = is_looping_clone.lock() {
-                            *is_looping = false;
-                            println!("Loop stop requested via global shortcut.");
-                        } else {
-                            println!("Failed to access loop flag.");
-                        }
-                    }
-                });
+                if let Some(action) = action {
+                    spawn_global_shortcut_action(
+                        action,
+                        self.config.clone(),
+                        Arc::clone(&self.enigo),
+                        Arc::clone(&self.is_looping),
+                    );
+                }
             }
         }
         Task::none()
