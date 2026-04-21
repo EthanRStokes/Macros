@@ -24,14 +24,14 @@ async-std = "1.13.2"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "52116d2"
+rev = "8b4c8ad"
 version = "1.0.0"
 default-features = false
 
 [target.'cfg(windows)'.dependencies]
 libcosmic = {
     git = "https://github.com/pop-os/libcosmic.git",
-    rev = "52116d2",
+    rev = "8b4c8ad",
     version = "1.0.0",
     default-features = false,
     features = [
@@ -46,7 +46,7 @@ libcosmic = {
 [target.'cfg(target_os = "linux")'.dependencies]
 libcosmic = {
     git = "https://github.com/pop-os/libcosmic.git",
-    rev = "52116d2",
+    rev = "8b4c8ad",
     version = "1.0.0",
     default-features = false,
     features = [

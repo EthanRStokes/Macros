@@ -7,9 +7,8 @@ use crate::util::{config, thread, loop_control};
 use tracing::warn;
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet};
-use cosmic::iced::{Alignment, Length};
-#[cfg(not(target_os = "linux"))]
-use cosmic::iced::Subscription;
+use cosmic::iced::{Alignment, Length, Subscription};
+use cosmic::iced::keyboard;
 use cosmic::widget::{column, container, row, scrollable, tooltip};
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
@@ -55,6 +54,8 @@ pub(crate) enum Message {
     SetTitle(String),
     AddInstruction(usize, Instruction),
     EditInstruction(usize, Instruction),
+    StartKeyCapture(usize),
+    KeyCaptureEvent(keyboard::Event),
     RemoveInstruction(isize),
     /// Reorder an instruction by moving it up or down
     /// Parameters: (index, direction) where direction is -1 for up, 1 for down
@@ -92,6 +93,8 @@ pub(crate) struct App {
     confirm_clear_instructions: bool,
     /// Generation counter used to ignore stale clear-confirm timeout tasks
     clear_confirm_generation: u64,
+    /// Which instruction index is currently waiting for key capture
+    key_capture_index: Option<usize>,
     #[cfg(not(target_os = "linux"))]
     manager: GlobalHotKeyManager,
     #[cfg(not(target_os = "linux"))]
@@ -109,6 +112,7 @@ impl App {
         self.macro_selected = selected;
         self.confirm_remove_macro = false;
         self.confirm_clear_instructions = false;
+        self.key_capture_index = None;
         let macros = config::get_macros_from_config(&self.config);
 
         if let Some(index) = selected {
@@ -173,6 +177,25 @@ impl App {
                 self.update_macros();
             }
         }
+    }
+}
+
+fn map_iced_key_to_enigo_key(key: keyboard::Key<&str>) -> Option<Key> {
+    match key {
+        keyboard::Key::Character(text) => {
+            let mut chars = text.chars();
+            let c = chars.next()?;
+            if chars.next().is_none() {
+                Some(Key::Unicode(c))
+            } else {
+                None
+            }
+        }
+        keyboard::Key::Named(named) => {
+            let named_text = format!("{:?}", named);
+            string_to_key(&named_text).ok()
+        }
+        keyboard::Key::Unidentified => None,
     }
 }
 
@@ -353,6 +376,7 @@ impl cosmic::Application for App {
             confirm_remove_macro: false,
             confirm_clear_instructions: false,
             clear_confirm_generation: 0,
+            key_capture_index: None,
             #[cfg(not(target_os = "linux"))]
             manager,
             #[cfg(not(target_os = "linux"))]
@@ -437,9 +461,25 @@ impl cosmic::Application for App {
         (app, command)
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn subscription(&self) -> Subscription<Self::Message> {
-        Subscription::run(hotkey_sub)
+        let key_capture_subscription = if self.key_capture_index.is_some() {
+            keyboard::listen().map(Message::KeyCaptureEvent)
+        } else {
+            Subscription::none()
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            Subscription::batch(vec![
+                Subscription::run(hotkey_sub),
+                key_capture_subscription,
+            ])
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            key_capture_subscription
+        }
     }
 
     /// Handle application events here.
@@ -514,6 +554,30 @@ impl cosmic::Application for App {
                         mac.code[index] = instruction;
                         self.auto_save_current_macro();
                     }
+                }
+            }
+            StartKeyCapture(index) => {
+                self.key_capture_index = Some(index);
+            }
+            KeyCaptureEvent(event) => {
+                if let keyboard::Event::KeyPressed { key, .. } = event {
+                    let Some(index) = self.key_capture_index else {
+                        return Task::none();
+                    };
+
+                    if let Some(mac) = &mut self.current_macro {
+                        if let Some(Instruction::Token(Token::Key(_, direction))) =
+                            mac.code.get(index).cloned()
+                        {
+                            if let Some(captured_key) = map_iced_key_to_enigo_key(key.as_ref()) {
+                                mac.code[index] = Instruction::Token(Token::Key(captured_key, direction));
+                                self.auto_save_current_macro();
+                            }
+                        }
+                    }
+
+                    // Stop listening after the first observed key press.
+                    self.key_capture_index = None;
                 }
             }
             RemoveInstruction(index) => {
@@ -802,11 +866,17 @@ impl cosmic::Application for App {
                                 ].spacing(10).into()
                             }
                             Token::Key(key, direction) => {
+                                let key_label = if self.key_capture_index == Some(index) {
+                                    "Press any key...".to_string()
+                                } else {
+                                    format!("{}", key_to_string(&key).unwrap_or("Unknown"))
+                                };
+
                                 row![
                                     widget::text::body("Key:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("", key_to_string(&key).unwrap_or_default())
-                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Key(string_to_key(x.as_str()).unwrap_or(key), direction.clone())))),
-                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Key(key, if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release })))),
+                                    button(cosmic::widget::text(key_label))
+                                        .on_press(StartKeyCapture(index)),
+                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Key(key.clone(), if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release })))),
                                 ].spacing(10).into()
                             }
                             Token::Raw(keycode, _) => {
