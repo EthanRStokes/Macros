@@ -1,13 +1,15 @@
 use crate::app::Message::*;
 use crate::macros::{Instruction, Macro};
 use crate::util::{add_macro, key_to_string, string_to_key, ThreadPool};
-use crate::util::{get_macro, run_macro};
+use crate::util::run_macro;
 use crate::util::{get_mouse_button_names, mouse_button_to_index, index_to_mouse_button};
 use crate::util::{config, thread, loop_control};
 use tracing::warn;
 use cosmic::app::{Core, Task};
-use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
-use cosmic::iced::{Alignment, Length, Subscription};
+use cosmic::cosmic_config::{Config, ConfigGet};
+use cosmic::iced::{Alignment, Length};
+#[cfg(not(target_os = "linux"))]
+use cosmic::iced::Subscription;
 use cosmic::widget::{column, container, row, scrollable, tooltip};
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
@@ -18,8 +20,12 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use cosmic::dialog::ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use cosmic::iced::futures::executor::block_on;
-use cosmic::iced::futures::{SinkExt, Stream, StreamExt};
+#[cfg(not(target_os = "linux"))]
+use cosmic::iced::futures::{SinkExt, Stream};
+use cosmic::iced::futures::StreamExt;
+#[cfg(not(target_os = "linux"))]
 use cosmic::iced::futures::channel::mpsc::Sender;
+#[cfg(not(target_os = "linux"))]
 use cosmic::iced::stream::channel;
 use cosmic::iced::widget::button;
 #[cfg(not(target_os = "linux"))]
@@ -103,14 +109,22 @@ impl App {
         self.macro_selected = selected;
         self.confirm_remove_macro = false;
         self.confirm_clear_instructions = false;
-        // Store the selected macro index in config so global shortcuts can access it
-        if let Err(err) = self.config.set("selected_macro", selected) {
-            warn!("Failed to save selected macro index: {}", err);
+        let macros = config::get_macros_from_config(&self.config);
+
+        if let Some(index) = selected {
+            if let Some(mac) = macros.get(index).cloned() {
+                if let Err(err) = config::set_selected_macro_id(&self.config, Some(&mac.id)) {
+                    warn!("Failed to save selected macro id: {}", err);
+                }
+                self.current_macro = Some(mac);
+                return;
+            }
         }
-        if let Some(selected) = selected {
-            self.current_macro = Some(get_macro(&self.config, selected));
-        } else {
-            self.current_macro = None;
+
+        self.macro_selected = None;
+        self.current_macro = None;
+        if let Err(err) = config::set_selected_macro_id(&self.config, None) {
+            warn!("Failed to clear selected macro id: {}", err);
         }
     }
 
@@ -123,31 +137,49 @@ impl App {
         self.macros.clear();
         self.macro_keys.clear();
         self.macro_strs.clear();
-        for mac in macs {
-            let key = self.macros.insert(mac);
+        for mac in &macs {
+            let key = self.macros.insert(mac.clone());
             let mac = self.macros.get_mut(key).unwrap();
             self.macro_keys.insert(key, mac.name.clone());
             self.macro_strs.push(mac.name.clone());
         }
+
+        if let Some(selected_id) = config::get_selected_macro_id(&self.config) {
+            if let Some((index, mac)) = macs
+                .iter()
+                .enumerate()
+                .find(|(_, mac)| mac.id == selected_id)
+            {
+                self.macro_selected = Some(index);
+                self.current_macro = Some(mac.clone());
+                return;
+            }
+        }
+
+        self.macro_selected = None;
+        self.current_macro = None;
     }
 
     /// Automatically saves the current macro to config and updates the app state
     /// This should be called whenever the current macro is modified
     fn auto_save_current_macro(&mut self) {
-        if let Some(selected) = self.macro_selected {
-            if let Some(mac) = &self.current_macro {
-                if let Err(err) = config::update_macro_at_index(&self.config, selected, mac) {
-                    warn!("Failed to update macro: {}", err);
-                } else {
-                    self.update_macros();
+        if let Some(mac) = &self.current_macro {
+            if let Err(err) = config::save_macro(&self.config, mac) {
+                warn!("Failed to update macro: {}", err);
+            } else {
+                if let Err(err) = config::set_selected_macro_id(&self.config, Some(&mac.id)) {
+                    warn!("Failed to save selected macro id: {}", err);
                 }
+                self.update_macros();
             }
         }
     }
 }
 
 fn add_default_config(config: &Config) {
-    add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![]));
+    if let Err(err) = add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![])) {
+        warn!("Failed to add default macro: {}", err);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -193,29 +225,16 @@ fn run_selected_macro_from_shortcut(
         println!("Macro is already looping, ignoring run request");
         return;
     }
-
-    let selected_index = match config.get::<Option<usize>>("selected_macro") {
-        Ok(Some(index)) => index,
-        Ok(None) => {
+    let selected_macro_id = match config::get_selected_macro_id(config) {
+        Some(id) => id,
+        None => {
             println!("No macro currently selected for global shortcut");
             return;
         }
-        Err(err) => {
-            warn!("Failed to read selected macro for global shortcut: {}", err);
-            return;
-        }
     };
 
-    let macros = match config.get::<Vec<Macro>>("macros") {
-        Ok(macros) => macros,
-        Err(err) => {
-            warn!("Failed to load macros for global shortcut: {}", err);
-            return;
-        }
-    };
-
-    let Some(mac) = macros.get(selected_index).cloned() else {
-        println!("No macro found at index {}", selected_index);
+    let Some(mac) = config::get_macro_by_id(config, &selected_macro_id) else {
+        println!("No macro found with id {}", selected_macro_id);
         return;
     };
 
@@ -343,10 +362,13 @@ impl cosmic::Application for App {
         };
 
         let config = &app.config;
-        let macros = config.get::<Vec<Macro>>("macros");
 
-        // Add default config. Everything here is temporary until a later state of the project.
-        if macros.is_err() {
+        if let Err(err) = config::migrate_legacy_macros_to_files(config) {
+            warn!("Failed to migrate legacy macros: {}", err);
+        }
+
+        let macros = config::get_macros_from_config(config);
+        if macros.is_empty() {
             add_default_config(config);
         }
 
@@ -355,21 +377,6 @@ impl cosmic::Application for App {
         // Restore the loop mode setting from config
         if let Ok(loop_mode) = app.config.get::<bool>("loop_mode_enabled") {
             app.loop_mode_enabled = loop_mode;
-        }
-
-        // Restore the previously selected macro from config
-        if let Ok(selected_index) = app.config.get::<Option<usize>>("selected_macro") {
-            if let Some(index) = selected_index {
-                // Validate that the index is still valid after loading macros
-                if let Ok(macros) = app.config.get::<Vec<Macro>>("macros") {
-                    if index < macros.len() {
-                        app.update_macro(Some(index));
-                    } else {
-                        // Index is out of bounds, clear the selection
-                        app.update_macro(None);
-                    }
-                }
-            }
         }
 
         let command = app.update_title();
@@ -561,30 +568,40 @@ impl cosmic::Application for App {
                 }
             }
             SaveMacro => {
-                if let Some(selected) = self.macro_selected {
-                    if let Some(mac) = &self.current_macro {
-                        if let Err(err) = config::update_macro_at_index(&self.config, selected, mac) {
-                            warn!("Failed to save macro: {}", err);
-                        } else {
-                            self.update_macros();
-                        }
+                if let Some(mac) = &self.current_macro {
+                    if let Err(err) = config::save_macro(&self.config, mac) {
+                        warn!("Failed to save macro: {}", err);
+                    } else {
+                        self.update_macros();
                     }
                 }
             }
             NewMacro => {
-                add_macro(&self.config, Macro::new("New Macro".into(), "New Macro".into(), vec![]));
+                let new_macro = Macro::new("New Macro".into(), "New Macro".into(), vec![]);
+                let new_id = new_macro.id.clone();
+                if let Err(err) = add_macro(&self.config, new_macro) {
+                    warn!("Failed to create macro: {}", err);
+                }
                 self.update_macros();
-                self.update_macro(Some(self.macros.len() - 1));
+                if let Some((index, _)) = config::get_macros_from_config(&self.config)
+                    .iter()
+                    .enumerate()
+                    .find(|(_, mac)| mac.id == new_id)
+                {
+                    self.update_macro(Some(index));
+                }
             }
             RemoveMacro => {
                 if !self.confirm_remove_macro {
                     self.confirm_remove_macro = true;
-                } else if let Some(selected) = self.macro_selected {
-                    if let Err(err) = config::remove_macro_at_index(&self.config, selected) {
-                        warn!("Failed to remove macro: {}", err);
-                    } else {
-                        self.update_macros();
-                        self.update_macro(None);
+                } else {
+                    if let Some(mac) = self.current_macro.clone() {
+                        if let Err(err) = config::remove_macro_by_id(&self.config, &mac.id) {
+                            warn!("Failed to remove macro: {}", err);
+                        } else {
+                            self.update_macros();
+                            self.update_macro(None);
+                        }
                     }
                     self.confirm_remove_macro = false;
                 }
@@ -632,10 +649,6 @@ impl cosmic::Application for App {
 
         let pill_button = |label: &'static str| {
             button(cosmic::widget::text(label)).padding([10, 18])
-        };
-
-        let compact_pill_button = |label: &'static str| -> cosmic::iced::widget::Button<'_, Message, cosmic::Theme> {
-            button(cosmic::widget::text(label)).padding([6, 12])
         };
 
         let symbol_label_button = |symbol: &'static str, label: &'static str| {

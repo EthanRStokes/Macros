@@ -1,4 +1,6 @@
 use std::process::Command;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, JoinHandle};
 use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
@@ -9,23 +11,9 @@ use enigo::Button as EnigoButton;
 use tracing::warn;
 use crate::macros::{Instruction, Macro};
 
-pub(crate) fn get_macro(config: &Config, mac: usize) -> Macro {
-    let macs = config.get::<Vec<Macro>>("macros").expect("Macros file not found");
-    macs[mac].clone()
-}
-
-pub(crate) fn add_macro(config: &Config, mac: Macro) {
-    let tx = config.transaction();
-    let mut macros = config.get::<Vec<Macro>>("macros");
-
-    if macros.is_err() {
-        tx.set("macros", vec![mac]).expect("Error setting config");
-    } else {
-        macros.as_mut().unwrap().push(mac);
-        tx.set("macros", macros.unwrap()).expect("Error unwrapping macro");
-    }
-
-    println!("Commit transaction: {:?}", tx.commit());
+pub(crate) fn add_macro(config: &Config, mut mac: Macro) -> Result<(), String> {
+    mac.ensure_id();
+    config::save_macro(config, &mac)
 }
 
 pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
@@ -328,7 +316,6 @@ pub(crate) fn mouse_button_to_index(button: &EnigoButton) -> usize {
         EnigoButton::ScrollDown => 6,
         EnigoButton::ScrollLeft => 7,
         EnigoButton::ScrollRight => 8,
-        _ => 0, // Default to Left
     }
 }
 
@@ -352,39 +339,187 @@ pub(crate) mod config {
     use super::*;
     use tracing::warn;
 
+    const APP_ID: &str = "com.treetrain1.Macros";
+    const MACROS_DIR_NAME: &str = "macros";
+    const MACRO_FILE_EXTENSION: &str = "json";
+    const SELECTED_MACRO_ID_KEY: &str = "selected_macro_id";
+    const LEGACY_SELECTED_MACRO_KEY: &str = "selected_macro";
+    const LEGACY_MACROS_KEY: &str = "macros";
+
+    fn app_config_dir() -> Result<PathBuf, String> {
+        let mut config_dir = dirs::config_dir().ok_or_else(|| "Unable to resolve config directory".to_string())?;
+        config_dir.push(APP_ID);
+        Ok(config_dir)
+    }
+
+    fn ensure_macros_dir() -> Result<PathBuf, String> {
+        let mut path = app_config_dir()?;
+        path.push(MACROS_DIR_NAME);
+        fs::create_dir_all(&path).map_err(|err| format!("Failed to create macros directory '{}': {}", path.display(), err))?;
+        Ok(path)
+    }
+
+    fn macro_file_path(id: &str) -> Result<PathBuf, String> {
+        if id.trim().is_empty() {
+            return Err("Cannot build macro path with empty id".to_string());
+        }
+
+        let mut path = ensure_macros_dir()?;
+        path.push(format!("{}.{}", id, MACRO_FILE_EXTENSION));
+        Ok(path)
+    }
+
+    fn read_macro_file(path: &Path) -> Result<Macro, String> {
+        let contents = fs::read_to_string(path)
+            .map_err(|err| format!("Failed to read macro file '{}': {}", path.display(), err))?;
+        let mut mac: Macro = serde_json::from_str(&contents)
+            .map_err(|err| format!("Failed to parse macro file '{}': {}", path.display(), err))?;
+        mac.ensure_id();
+        Ok(mac)
+    }
+
+    fn write_macro_file(path: &Path, mac: &Macro) -> Result<(), String> {
+        let serialized = serde_json::to_string_pretty(mac)
+            .map_err(|err| format!("Failed to serialize macro '{}': {}", mac.name, err))?;
+
+        // Write to a temporary file first and rename to reduce corruption risk.
+        let mut temp_path = path.to_path_buf();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("Invalid macro file name '{}'", path.display()))?;
+        temp_path.set_file_name(format!("{}.tmp", file_name));
+
+        fs::write(&temp_path, serialized)
+            .map_err(|err| format!("Failed to write temporary macro file '{}': {}", temp_path.display(), err))?;
+
+        if path.exists() {
+            fs::remove_file(path)
+                .map_err(|err| format!("Failed to replace macro file '{}': {}", path.display(), err))?;
+        }
+
+        fs::rename(&temp_path, path)
+            .map_err(|err| format!("Failed to finalize macro file '{}': {}", path.display(), err))?;
+
+        Ok(())
+    }
+
+    fn list_macro_file_paths() -> Result<Vec<PathBuf>, String> {
+        let dir = ensure_macros_dir()?;
+        let entries = fs::read_dir(&dir)
+            .map_err(|err| format!("Failed to scan macros directory '{}': {}", dir.display(), err))?;
+
+        let mut paths = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.is_file())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some(MACRO_FILE_EXTENSION))
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths)
+    }
+
+    fn clear_legacy_keys(config: &Config) {
+        if let Err(err) = config.set(LEGACY_MACROS_KEY, Vec::<Macro>::new()) {
+            warn!("Failed to clear legacy macros key: {}", err);
+        }
+        if let Err(err) = config.set(LEGACY_SELECTED_MACRO_KEY, Option::<usize>::None) {
+            warn!("Failed to clear legacy selected macro key: {}", err);
+        }
+    }
+
+    pub(crate) fn set_selected_macro_id(config: &Config, macro_id: Option<&str>) -> Result<(), String> {
+        config
+            .set(SELECTED_MACRO_ID_KEY, macro_id.map(|id| id.to_string()))
+            .map_err(|err| {
+                let error_msg = format!("Failed to save selected macro id: {}", err);
+                warn!("{}", error_msg);
+                error_msg
+            })
+    }
+
+    pub(crate) fn get_selected_macro_id(config: &Config) -> Option<String> {
+        config
+            .get::<Option<String>>(SELECTED_MACRO_ID_KEY)
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn save_macro(_config: &Config, mac: &Macro) -> Result<(), String> {
+        let path = macro_file_path(&mac.id)?;
+        write_macro_file(&path, mac)
+    }
+
+    pub(crate) fn remove_macro_by_id(_config: &Config, macro_id: &str) -> Result<(), String> {
+        let path = macro_file_path(macro_id)?;
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|err| format!("Failed to remove macro file '{}': {}", path.display(), err))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_macro_by_id(config: &Config, macro_id: &str) -> Option<Macro> {
+        get_macros_from_config(config)
+            .into_iter()
+            .find(|mac| mac.id == macro_id)
+    }
+
+    pub(crate) fn migrate_legacy_macros_to_files(config: &Config) -> Result<(), String> {
+        let mut legacy_macros = match config.get::<Vec<Macro>>(LEGACY_MACROS_KEY) {
+            Ok(macros) => macros,
+            Err(_) => return Ok(()),
+        };
+
+        let existing_paths = list_macro_file_paths()?;
+
+        if existing_paths.is_empty() {
+            for mac in &mut legacy_macros {
+                mac.ensure_id();
+                save_macro(config, mac)?;
+            }
+        }
+
+        if let Ok(Some(selected_index)) = config.get::<Option<usize>>(LEGACY_SELECTED_MACRO_KEY) {
+            if let Some(selected_macro) = legacy_macros.get(selected_index) {
+                set_selected_macro_id(config, Some(&selected_macro.id))?;
+            }
+        }
+
+        clear_legacy_keys(config);
+        Ok(())
+    }
+
     pub(crate) fn get_macros_from_config(config: &Config) -> Vec<Macro> {
-        config.get::<Vec<Macro>>("macros").unwrap_or_else(|err| {
-            warn!("Failed to get macros config: {}", err);
-            Vec::new()
-        })
-    }
-
-    pub(crate) fn set_macros_in_config(config: &Config, macros: Vec<Macro>) -> Result<(), String> {
-        config.set("macros", macros).map_err(|err| {
-            let error_msg = format!("Failed to set macros config: {}", err);
-            warn!("{}", error_msg);
-            error_msg
-        })
-    }
-
-    pub(crate) fn update_macro_at_index(config: &Config, index: usize, new_macro: &Macro) -> Result<(), String> {
-        let mut macros = get_macros_from_config(config);
-        if index < macros.len() {
-            macros[index] = new_macro.clone();
-            set_macros_in_config(config, macros)
-        } else {
-            Err(format!("Macro index {} out of bounds", index))
+        if let Err(err) = migrate_legacy_macros_to_files(config) {
+            warn!("Failed to migrate legacy macro config: {}", err);
         }
-    }
 
-    pub(crate) fn remove_macro_at_index(config: &Config, index: usize) -> Result<(), String> {
-        let mut macros = get_macros_from_config(config);
-        if index < macros.len() {
-            macros.remove(index);
-            set_macros_in_config(config, macros)
-        } else {
-            Err(format!("Macro index {} out of bounds", index))
+        let mut macros = Vec::new();
+        let paths = match list_macro_file_paths() {
+            Ok(paths) => paths,
+            Err(err) => {
+                warn!("Failed to scan macro files: {}", err);
+                return macros;
+            }
+        };
+
+        for path in paths {
+            match read_macro_file(&path) {
+                Ok(mac) => macros.push(mac),
+                Err(err) => warn!("{}", err),
+            }
         }
+
+        macros.sort_by(|left, right| {
+            let name_order = left.name.to_lowercase().cmp(&right.name.to_lowercase());
+            if name_order.is_eq() {
+                left.id.cmp(&right.id)
+            } else {
+                name_order
+            }
+        });
+
+        macros
     }
 
     pub(crate) fn save_config_value<T: serde::Serialize>(config: &Config, key: &str, value: T) -> Result<(), String> {
