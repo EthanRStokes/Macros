@@ -875,9 +875,10 @@ impl cosmic::Application for App {
                                 row![
                                     widget::text::body("Key:".to_string()).align_y(Alignment::Center),
                                     button(cosmic::widget::text(key_label))
-                                        .on_press(StartKeyCapture(index)),
+                                        .on_press(StartKeyCapture(index))
+                                        .width(Length::Fill),
                                     widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Key(key.clone(), if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release })))),
-                                ].spacing(10).into()
+                                ].spacing(10).width(Length::Fill).into()
                             }
                             Token::Raw(keycode, _) => {
                                 widget::text::body(format!("Raw: {:?}", keycode)).into()
