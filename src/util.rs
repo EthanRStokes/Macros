@@ -11,16 +11,23 @@ use enigo::Button as EnigoButton;
 use tracing::warn;
 use crate::macros::{Instruction, Macro};
 
+const DEFAULT_LOOP_COUNT: u32 = 1;
+const MAX_LOOP_COUNT: u32 = 1000;
+
 pub(crate) fn add_macro(config: &Config, mut mac: Macro) -> Result<(), String> {
     mac.ensure_id();
     config::save_macro(config, &mac)
 }
 
 pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
-    for ins in mac.code {
+    run_instructions(&mac.code, &enigo);
+}
+
+fn run_instructions(instructions: &[Instruction], enigo: &Arc<Mutex<Enigo>>) {
+    for ins in instructions {
         #[allow(unreachable_patterns)] match ins {
             Instruction::Wait(duration) => {
-                sleep(std::time::Duration::from_millis(duration));
+                sleep(std::time::Duration::from_millis(*duration));
             }
             Instruction::Script(script) => {
                 println!("Running script: {script}");
@@ -44,23 +51,34 @@ pub(crate) fn run_macro(mac: Macro, enigo: Arc<Mutex<Enigo>>) {
                         enigo.text(&text).expect(&format!("Failed to type text: {text}"));
                     }
                     Key(key, direction) => {
-                        enigo.key(key, direction).expect("Failed to type key");
+                        enigo.key(*key, *direction).expect("Failed to type key");
                     }
                     Raw(keycode, direction) => {
-                        enigo.raw(keycode, direction).expect(&format!("Failed to type raw keycode: {keycode}"));
+                        enigo.raw(*keycode, *direction).expect(&format!("Failed to type raw keycode: {keycode}"));
                     }
                     Button(button, direction) => {
-                        enigo.button(button, direction).expect("Failed to click mouse button");
+                        enigo.button(*button, *direction).expect("Failed to click mouse button");
                     }
                     MoveMouse(x, y, coord) => {
-                        enigo.move_mouse(x, y, coord).expect(&format!("Failed to move mouse to: ({x}, {y})"));
+                        enigo.move_mouse(*x, *y, *coord).expect(&format!("Failed to move mouse to: ({x}, {y})"));
                     }
                     Scroll(amount, axis) => {
-                        enigo.scroll(amount, axis).expect(&format!("Failed to scroll by: {amount}"));
+                        enigo.scroll(*amount, *axis).expect(&format!("Failed to scroll by: {amount}"));
                     }
                     _ => {
                         warn!("Token not implemented.");
                     }
+                }
+            }
+            Instruction::Loop { count, body } => {
+                let requested = *count;
+                let count = requested.clamp(1, MAX_LOOP_COUNT);
+                if requested != count {
+                    warn!("Loop count was out of range; clamped to {}", count);
+                }
+
+                for _ in 0..count {
+                    run_instructions(body, enigo);
                 }
             }
             _ => {
@@ -621,6 +639,10 @@ pub(crate) mod instruction_utils {
             4 => Some(Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
             5 => Some(Instruction::Token(Token::Scroll(4, Axis::Vertical))), // Default scroll amount
             6 => Some(Instruction::Script("script".into())),
+            7 => Some(Instruction::Loop {
+                count: DEFAULT_LOOP_COUNT,
+                body: vec![],
+            }),
             _ => None,
         }
     }
@@ -634,6 +656,7 @@ pub(crate) mod instruction_utils {
             "Move Mouse",
             "Scroll",
             "Run Script",
+            "Loop Section",
         ]
     }
 }

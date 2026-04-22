@@ -8,11 +8,13 @@ use tracing::warn;
 use cosmic::app::{Core, Task};
 use cosmic::cosmic_config::{Config, ConfigGet};
 use cosmic::iced::{Alignment, Length, Subscription};
+use cosmic::iced::{Color};
+use cosmic::iced::border::Border;
 use cosmic::iced::keyboard;
-use cosmic::widget::{column, container, row, scrollable, tooltip};
+use cosmic::widget::{column, container, mouse_area, row, scrollable, tooltip};
 use cosmic::{executor, widget, ApplicationExt, Apply, Element};
 use enigo::agent::Token;
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key};
+use enigo::{Axis, Coordinate, Direction, Enigo, Key};
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -35,8 +37,6 @@ use global_hotkey::{
 };
 
 // Constants for default values
-const DEFAULT_WAIT_TIME: u64 = 1000;
-const DEFAULT_SCROLL_AMOUNT: i32 = 4;
 const CLEAR_CONFIRM_TIMEOUT_SECS: u64 = 5;
 const LOOP_ITERATION_DELAY_MS: u64 = 1;
 
@@ -52,14 +52,21 @@ pub(crate) enum Message {
     RunMacro,
     ToggleLoopMode(bool),
     SetTitle(String),
-    AddInstruction(usize, Instruction),
-    EditInstruction(usize, Instruction),
-    StartKeyCapture(usize),
+    AddInstruction(Vec<usize>, usize, Instruction),
+    EditInstruction(Vec<usize>, Instruction),
+    StartKeyCapture(Vec<usize>),
     KeyCaptureEvent(keyboard::Event),
-    RemoveInstruction(isize),
-    /// Reorder an instruction by moving it up or down
-    /// Parameters: (index, direction) where direction is -1 for up, 1 for down
-    ReorderInstruction(usize, isize),
+    RemoveInstruction(Vec<usize>),
+    ReorderInstruction(Vec<usize>, isize),
+    MoveInstructionOut(Vec<usize>),
+    HoverInstruction(Vec<usize>),
+    UnhoverInstruction(Vec<usize>),
+    StartInstructionDrag(Vec<usize>),
+    HoverBodyDropEnd(Vec<usize>),
+    UnhoverBodyDropEnd(Vec<usize>),
+    DropDraggedInstructionOn(Vec<usize>),
+    DropDraggedInstructionAtEnd(Vec<usize>),
+    CancelInstructionDrag,
     ClearInstructions,
     ClearInstructionsTimeout(u64),
     SaveMacro,
@@ -94,13 +101,25 @@ pub(crate) struct App {
     /// Generation counter used to ignore stale clear-confirm timeout tasks
     clear_confirm_generation: u64,
     /// Which instruction index is currently waiting for key capture
-    key_capture_index: Option<usize>,
+    key_capture_path: Option<Vec<usize>>,
+    /// Path currently hovered to reveal the drag handle
+    hovered_instruction_path: Option<Vec<usize>>,
+    /// Path currently being dragged from the handle
+    dragging_instruction_path: Option<Vec<usize>>,
+    /// Current drag-and-drop target
+    drag_drop_target: Option<DragDropTarget>,
     #[cfg(not(target_os = "linux"))]
     manager: GlobalHotKeyManager,
     #[cfg(not(target_os = "linux"))]
     run_macro_id: u32,
     #[cfg(not(target_os = "linux"))]
     stop_loop_id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DragDropTarget {
+    Instruction(Vec<usize>),
+    EndOfBody(Vec<usize>),
 }
 
 impl App {
@@ -112,7 +131,10 @@ impl App {
         self.macro_selected = selected;
         self.confirm_remove_macro = false;
         self.confirm_clear_instructions = false;
-        self.key_capture_index = None;
+        self.key_capture_path = None;
+        self.hovered_instruction_path = None;
+        self.dragging_instruction_path = None;
+        self.drag_drop_target = None;
         let macros = config::get_macros_from_config(&self.config);
 
         if let Some(index) = selected {
@@ -127,6 +149,10 @@ impl App {
 
         self.macro_selected = None;
         self.current_macro = None;
+        self.key_capture_path = None;
+        self.hovered_instruction_path = None;
+        self.dragging_instruction_path = None;
+        self.drag_drop_target = None;
         if let Err(err) = config::set_selected_macro_id(&self.config, None) {
             warn!("Failed to clear selected macro id: {}", err);
         }
@@ -162,6 +188,10 @@ impl App {
 
         self.macro_selected = None;
         self.current_macro = None;
+        self.key_capture_path = None;
+        self.hovered_instruction_path = None;
+        self.dragging_instruction_path = None;
+        self.drag_drop_target = None;
     }
 
     /// Automatically saves the current macro to config and updates the app state
@@ -203,6 +233,599 @@ fn add_default_config(config: &Config) {
     if let Err(err) = add_macro(config, Macro::new("New Macro".into(), "description".into(), vec![])) {
         warn!("Failed to add default macro: {}", err);
     }
+}
+
+fn clamp_loop_count(count: u32) -> u32 {
+    count.clamp(1, 1000)
+}
+
+fn get_instruction<'a>(instructions: &'a [Instruction], path: &[usize]) -> Option<&'a Instruction> {
+    let (first, rest) = path.split_first()?;
+    let instruction = instructions.get(*first)?;
+
+    if rest.is_empty() {
+        Some(instruction)
+    } else {
+        match instruction {
+            Instruction::Loop { body, .. } => get_instruction(body, rest),
+            _ => None,
+        }
+    }
+}
+
+fn get_instruction_mut<'a>(instructions: &'a mut [Instruction], path: &[usize]) -> Option<&'a mut Instruction> {
+    let (first, rest) = path.split_first()?;
+    let instruction = instructions.get_mut(*first)?;
+
+    if rest.is_empty() {
+        Some(instruction)
+    } else {
+        match instruction {
+            Instruction::Loop { body, .. } => get_instruction_mut(body, rest),
+            _ => None,
+        }
+    }
+}
+
+fn get_body_mut<'a>(instructions: &'a mut Vec<Instruction>, path: &[usize]) -> Option<&'a mut Vec<Instruction>> {
+    if path.is_empty() {
+        return Some(instructions);
+    }
+
+    let (first, rest) = path.split_first()?;
+    let instruction = instructions.get_mut(*first)?;
+
+    match instruction {
+        Instruction::Loop { body, .. } => {
+            if rest.is_empty() {
+                Some(body)
+            } else {
+                get_body_mut(body, rest)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn get_body<'a>(instructions: &'a [Instruction], path: &[usize]) -> Option<&'a [Instruction]> {
+    if path.is_empty() {
+        return Some(instructions);
+    }
+
+    let (first, rest) = path.split_first()?;
+    let instruction = instructions.get(*first)?;
+
+    match instruction {
+        Instruction::Loop { body, .. } => {
+            if rest.is_empty() {
+                Some(body.as_slice())
+            } else {
+                get_body(body, rest)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parent_path(path: &[usize]) -> Option<(&[usize], usize)> {
+    let (last, parent) = path.split_last()?;
+    Some((parent, *last))
+}
+
+fn replace_instruction_at_path(instructions: &mut Vec<Instruction>, path: &[usize], new_instruction: Instruction) -> bool {
+    if let Some(instruction) = get_instruction_mut(instructions.as_mut_slice(), path) {
+        *instruction = new_instruction;
+        true
+    } else {
+        false
+    }
+}
+
+fn remove_instruction_at_path(instructions: &mut Vec<Instruction>, path: &[usize]) -> bool {
+    let Some((parent, index)) = parent_path(path) else {
+        return false;
+    };
+
+    let Some(body) = get_body_mut(instructions, parent) else {
+        return false;
+    };
+
+    if index < body.len() {
+        body.remove(index);
+        true
+    } else {
+        false
+    }
+}
+
+fn reorder_instruction_at_path(instructions: &mut Vec<Instruction>, path: &[usize], direction: isize) -> bool {
+    let Some((parent, index)) = parent_path(path) else {
+        return false;
+    };
+
+    let Some(body) = get_body_mut(instructions, parent) else {
+        return false;
+    };
+
+    let len = body.len();
+    if len <= 1 || index >= len {
+        return false;
+    }
+
+    let new_index = if direction < 0 {
+        if index > 0 { index - 1 } else { index }
+    } else if index < len - 1 {
+        index + 1
+    } else {
+        index
+    };
+
+    if new_index != index {
+        body.swap(index, new_index);
+        true
+    } else {
+        false
+    }
+}
+
+fn insert_instruction_at_path(instructions: &mut Vec<Instruction>, body_path: &[usize], index: usize, instruction: Instruction) -> bool {
+    let Some(body) = get_body_mut(instructions, body_path) else {
+        return false;
+    };
+
+    if index <= body.len() {
+        body.insert(index, instruction);
+        true
+    } else {
+        false
+    }
+}
+
+fn can_move_instruction_out(path: &[usize]) -> bool {
+    path.len() >= 2
+}
+
+fn path_is_prefix(prefix: &[usize], path: &[usize]) -> bool {
+    prefix.len() <= path.len() && prefix.iter().zip(path.iter()).all(|(a, b)| a == b)
+}
+
+fn can_move_instruction_to_body(instructions: &[Instruction], source: &[usize], dest_body_path: &[usize], dest_index: usize) -> bool {
+    let Some((src_parent, src_index)) = parent_path(source) else {
+        return false;
+    };
+
+    if path_is_prefix(source, dest_body_path) {
+        return false;
+    }
+
+    let Some(dest_body) = get_body(instructions, dest_body_path) else {
+        return false;
+    };
+
+    if dest_index > dest_body.len() {
+        return false;
+    }
+
+    let mut adjusted = dest_index;
+    if src_parent == dest_body_path && src_index < adjusted {
+        adjusted -= 1;
+    }
+
+    !(src_parent == dest_body_path && src_index == adjusted)
+}
+
+fn move_instruction_to_body(instructions: &mut Vec<Instruction>, source: &[usize], dest_body_path: &[usize], dest_index: usize) -> bool {
+    if !can_move_instruction_to_body(instructions, source, dest_body_path, dest_index) {
+        return false;
+    }
+
+    let Some((src_parent, src_index)) = parent_path(source) else {
+        return false;
+    };
+
+    let mut adjusted = dest_index;
+    if src_parent == dest_body_path && src_index < adjusted {
+        adjusted -= 1;
+    }
+
+    let Some(moved) = ({
+        let Some((parent, index)) = parent_path(source) else {
+            return false;
+        };
+        let Some(body) = get_body_mut(instructions, parent) else {
+            return false;
+        };
+        if index >= body.len() {
+            return false;
+        }
+        Some(body.remove(index))
+    }) else {
+        return false;
+    };
+
+    insert_instruction_at_path(instructions, dest_body_path, adjusted, moved)
+}
+
+fn can_drop_instruction_on_target(instructions: &[Instruction], source: &[usize], target: &[usize]) -> bool {
+    if source == target || path_is_prefix(source, target) {
+        return false;
+    }
+
+    let Some(target_instruction) = get_instruction(instructions, target) else {
+        return false;
+    };
+
+    let Some((target_parent, target_index)) = parent_path(target) else {
+        return false;
+    };
+
+    let _ = target_instruction;
+    can_move_instruction_to_body(instructions, source, target_parent, target_index)
+}
+
+fn drop_instruction_on_target(instructions: &mut Vec<Instruction>, source: &[usize], target: &[usize]) -> bool {
+    let Some(target_instruction) = get_instruction(instructions, target).cloned() else {
+        return false;
+    };
+
+    let Some((target_parent, target_index)) = parent_path(target) else {
+        return false;
+    };
+
+    let _ = target_instruction;
+    move_instruction_to_body(instructions, source, target_parent, target_index)
+}
+
+fn can_drop_instruction_at_end(instructions: &[Instruction], source: &[usize], body_path: &[usize]) -> bool {
+    let Some(body) = get_body(instructions, body_path) else {
+        return false;
+    };
+    can_move_instruction_to_body(instructions, source, body_path, body.len())
+}
+
+fn drop_instruction_at_end(instructions: &mut Vec<Instruction>, source: &[usize], body_path: &[usize]) -> bool {
+    let Some(body) = get_body(instructions, body_path) else {
+        return false;
+    };
+    move_instruction_to_body(instructions, source, body_path, body.len())
+}
+
+fn move_instruction_out_of_loop(instructions: &mut Vec<Instruction>, path: &[usize]) -> bool {
+    let Some((loop_body_path, child_index)) = parent_path(path) else {
+        return false;
+    };
+    let Some((grand_parent_path, loop_index)) = parent_path(loop_body_path) else {
+        return false;
+    };
+
+    let moved = {
+        let Some(loop_body) = get_body_mut(instructions, loop_body_path) else {
+            return false;
+        };
+        if child_index >= loop_body.len() {
+            return false;
+        }
+        loop_body.remove(child_index)
+    };
+
+    let Some(grand_body) = get_body_mut(instructions, grand_parent_path) else {
+        return false;
+    };
+
+    if loop_index <= grand_body.len() {
+        grand_body.insert(loop_index + 1, moved);
+        true
+    } else {
+        false
+    }
+}
+
+fn instruction_from_selection(selected: usize) -> Option<Instruction> {
+    crate::util::instruction_utils::create_default_instruction(selected)
+}
+
+fn render_instruction_add_dropdown(body_path: Vec<usize>, insert_index: usize) -> Element<'static, Message> {
+    cosmic::widget::dropdown(
+        crate::util::instruction_utils::get_instruction_type_names(),
+        None,
+        move |selected| match instruction_from_selection(selected) {
+            Some(instruction) => AddInstruction(body_path.clone(), insert_index, instruction),
+            None => unreachable!(),
+        },
+    )
+    .into()
+}
+
+fn render_instruction_list(app: &App, instructions: &[Instruction], body_path: Vec<usize>) -> Element<'static, Message> {
+    let spacing = cosmic::theme::active().cosmic().spacing;
+    let mut children: Vec<Element<Message>> = Vec::new();
+
+    for (index, ins) in instructions.iter().cloned().enumerate() {
+        let mut full_path = body_path.clone();
+        full_path.push(index);
+
+        let instruction_source = ins.clone();
+        let instruction: Element<Message> = match instruction_source {
+            Instruction::Token(token) => match token {
+                Token::Text(text) => row![
+                    widget::text::body("Text:".to_string()).align_y(Alignment::Center),
+                    widget::text_input("", text)
+                        .on_input({
+                            let path = full_path.clone();
+                            move |x| EditInstruction(path.clone(), Instruction::Token(Token::Text(x)))
+                        }),
+                ]
+                .spacing(10)
+                .into(),
+                Token::Key(key, direction) => {
+                    let key_label = if app.key_capture_path.as_ref() == Some(&full_path) {
+                        "Press any key...".to_string()
+                    } else {
+                        format!("{}", key_to_string(&key).unwrap_or("Unknown"))
+                    };
+
+                    row![
+                        widget::text::body("Key:".to_string()).align_y(Alignment::Center),
+                        button(cosmic::widget::text(key_label))
+                            .on_press(StartKeyCapture(full_path.clone()))
+                            .width(Length::Fill),
+                        widget::dropdown(
+                            &["Click", "Press", "Release"],
+                            Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }),
+                            {
+                                let path = full_path.clone();
+                                move |x: usize| {
+                                    EditInstruction(
+                                        path.clone(),
+                                        Instruction::Token(Token::Key(
+                                            key.clone(),
+                                            if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release },
+                                        )),
+                                    )
+                                }
+                            },
+                        ),
+                    ]
+                    .spacing(10)
+                    .width(Length::Fill)
+                    .into()
+                }
+                Token::Raw(keycode, _) => widget::text::body(format!("Raw: {:?}", keycode)).into(),
+                Token::Button(button, direction) => row![
+                    widget::text::body("Mouse:".to_string()).align_y(Alignment::Center),
+                    widget::dropdown(
+                        get_mouse_button_names(),
+                        Some(mouse_button_to_index(&button)),
+                        {
+                            let path = full_path.clone();
+                            move |x: usize| {
+                                EditInstruction(path.clone(), Instruction::Token(Token::Button(index_to_mouse_button(x), direction.clone())))
+                            }
+                        },
+                    ),
+                    widget::dropdown(
+                        &["Click", "Press", "Release"],
+                        Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }),
+                        {
+                            let path = full_path.clone();
+                            move |x: usize| {
+                                EditInstruction(
+                                    path.clone(),
+                                    Instruction::Token(Token::Button(
+                                        button,
+                                        if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release },
+                                    )),
+                                )
+                            }
+                        },
+                    ),
+                ]
+                .spacing(10)
+                .width(Length::Fill)
+                .into(),
+                Token::MoveMouse(x, y, coordinate) => row![
+                    widget::text::body("Move mouse:".to_string()).align_y(Alignment::Center),
+                    widget::text_input("X", format!("{}", x))
+                        .on_input({
+                            let path = full_path.clone();
+                            move |new_x| EditInstruction(path.clone(), Instruction::Token(Token::MoveMouse(new_x.parse().unwrap_or(x), y, coordinate.clone())))
+                        }),
+                    widget::text_input("Y", format!("{}", y))
+                        .on_input({
+                            let path = full_path.clone();
+                            move |new_y| EditInstruction(path.clone(), Instruction::Token(Token::MoveMouse(x, new_y.parse().unwrap_or(y), coordinate.clone())))
+                        }),
+                    widget::dropdown(
+                        &["Absolute", "Relative"],
+                        Some(if coordinate == Coordinate::Abs { 0usize } else { 1usize }),
+                        {
+                            let path = full_path.clone();
+                            move |coord: usize| EditInstruction(path.clone(), Instruction::Token(Token::MoveMouse(x, y, if coord == 0 { Coordinate::Abs } else { Coordinate::Rel })))
+                        },
+                    ),
+                ]
+                .spacing(10)
+                .into(),
+                Token::Scroll(amount, axis) => row![
+                    widget::text::body("Scroll:".to_string()).align_y(Alignment::Center),
+                    widget::text_input("Amount", format!("{}", amount))
+                        .on_input({
+                            let path = full_path.clone();
+                            move |new_amount| EditInstruction(path.clone(), Instruction::Token(Token::Scroll(new_amount.parse().unwrap_or(amount), axis.clone())))
+                        }),
+                    widget::dropdown(
+                        &["Vertical", "Horizontal"],
+                        Some(if axis == Axis::Vertical { 0 } else { 1 }),
+                        {
+                            let path = full_path.clone();
+                            move |new_axis: usize| EditInstruction(path.clone(), Instruction::Token(Token::Scroll(amount, if new_axis == 0 { Axis::Vertical } else { Axis::Horizontal })))
+                        },
+                    ),
+                ]
+                .spacing(10)
+                .into(),
+                _ => widget::text::body("Token not implemented").into(),
+            },
+            Instruction::Wait(duration) => row![
+                widget::text::body("Wait (ms):".to_string()).align_y(Alignment::Center),
+                widget::text_input("", duration.to_string())
+                    .on_input({
+                        let path = full_path.clone();
+                        move |x| EditInstruction(path.clone(), Instruction::Wait(x.parse().unwrap_or(duration)))
+                    }),
+            ]
+            .spacing(10)
+            .into(),
+            Instruction::Script(script) => row![
+                widget::text::body("Script:".to_string()).align_y(Alignment::Center),
+                widget::text_input("", script)
+                    .on_input({
+                        let path = full_path.clone();
+                        move |x| EditInstruction(path.clone(), Instruction::Script(x))
+                    }),
+            ]
+            .spacing(10)
+            .into(),
+            Instruction::Loop { count, body } => {
+                let clamped_count = clamp_loop_count(count);
+                let nested = render_instruction_list(app, &body, full_path.clone());
+
+                column![
+                    row![
+                        widget::text::body("Loop:".to_string()).align_y(Alignment::Center),
+                        widget::text_input("Count", clamped_count.to_string())
+                            .on_input({
+                                let path = full_path.clone();
+                                move |x| {
+                                    let parsed = x.parse::<u32>().unwrap_or(clamped_count);
+                                    let next_count = clamp_loop_count(parsed);
+                                    EditInstruction(
+                                        path.clone(),
+                                        Instruction::Loop {
+                                            count: next_count,
+                                            body: body.clone(),
+                                        },
+                                    )
+                                }
+                            }),
+                        tooltip(
+                            cosmic::widget::text("Loop section"),
+                            container("Repeat the nested instructions a fixed number of times"),
+                            tooltip::Position::Top,
+                        ),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                    container(
+                        column![
+                            widget::text::body("Loop body"),
+                            nested,
+                        ]
+                        .spacing(spacing.space_xs)
+                        .padding([0, 12, 0, 12]),
+                    )
+                    .width(Length::Fill),
+                ]
+                .spacing(spacing.space_xxs)
+                .into()
+            }
+        };
+
+        let show_handle = app.hovered_instruction_path.as_ref() == Some(&full_path)
+            || app.dragging_instruction_path.as_ref() == Some(&full_path);
+        let handle: Element<Message> = if show_handle {
+            mouse_area(button(cosmic::widget::text("⋮⋮")).padding([6, 8]))
+                .on_drag(StartInstructionDrag(full_path.clone()))
+                .on_release(CancelInstructionDrag)
+                .into()
+        } else {
+            container(cosmic::widget::text("  "))
+                .width(Length::Fixed(24.0))
+                .into()
+        };
+
+        let controls = container(
+            row![
+                tooltip(
+                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_UP))).padding(8).on_press(ReorderInstruction(full_path.clone(), -1)),
+                    container("Move up"),
+                    tooltip::Position::Top,
+                ),
+                tooltip(
+                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_DOWN))).padding(8).on_press(ReorderInstruction(full_path.clone(), 1)),
+                    container("Move down"),
+                    tooltip::Position::Bottom,
+                ),
+                tooltip(
+                    widget::button::icon(widget::icon::from_path(PathBuf::from(ICON_REMOVE))).padding(8).on_press(RemoveInstruction(full_path.clone())),
+                    container("Remove instruction"),
+                    tooltip::Position::Left,
+                ),
+                render_instruction_add_dropdown(body_path.clone(), index),
+            ]
+            .spacing(spacing.space_xs)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .align_x(Alignment::Center);
+
+        let row_content = row![
+            container(handle).width(Length::Fixed(28.0)).align_x(Alignment::Center),
+            instruction,
+            controls
+        ]
+        .spacing(spacing.space_xs)
+        .width(Length::Fill);
+
+        let header = mouse_area(row_content)
+            .on_enter(HoverInstruction(full_path.clone()))
+            .on_exit(UnhoverInstruction(full_path.clone()))
+            .on_release(DropDraggedInstructionOn(full_path.clone()));
+
+        if let Instruction::Loop { body, .. } = ins.clone() {
+            let end_is_target = matches!(app.drag_drop_target, Some(DragDropTarget::EndOfBody(ref p)) if p == &full_path);
+            let drop_zone = mouse_area(
+                container(widget::text::body(""))
+                    .width(Length::Fill)
+                    .padding([8, 12])
+                    .style(move |_theme| {
+                        let mut border = Border::default();
+                        border.width = 2.0;
+                        border.color = if end_is_target {
+                            Color::from_rgb8(76, 154, 255)
+                        } else {
+                            Color::TRANSPARENT
+                        };
+
+                        cosmic::widget::container::Style {
+                            border,
+                            ..Default::default()
+                        }
+                    }),
+            )
+            .on_enter(HoverBodyDropEnd(full_path.clone()))
+            .on_exit(UnhoverBodyDropEnd(full_path.clone()))
+            .on_release(DropDraggedInstructionAtEnd(full_path.clone()));
+
+            children.push(
+                column![
+                    header,
+                    drop_zone,
+                    container(render_instruction_list(app, &body, full_path.clone())).padding([0, 0, 0, 18]),
+                ]
+                .spacing(spacing.space_xs)
+                .into(),
+            );
+        } else {
+            children.push(header.into());
+        }
+    }
+
+    children.push(render_instruction_add_dropdown(body_path, instructions.len()));
+
+    widget::column::with_children(children)
+        .spacing(spacing.space_xs)
+        .into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -376,7 +999,10 @@ impl cosmic::Application for App {
             confirm_remove_macro: false,
             confirm_clear_instructions: false,
             clear_confirm_generation: 0,
-            key_capture_index: None,
+            key_capture_path: None,
+            hovered_instruction_path: None,
+            dragging_instruction_path: None,
+            drag_drop_target: None,
             #[cfg(not(target_os = "linux"))]
             manager,
             #[cfg(not(target_os = "linux"))]
@@ -462,7 +1088,7 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        let key_capture_subscription = if self.key_capture_index.is_some() {
+        let key_capture_subscription = if self.key_capture_path.is_some() {
             keyboard::listen().map(Message::KeyCaptureEvent)
         } else {
             Subscription::none()
@@ -542,71 +1168,142 @@ impl cosmic::Application for App {
                     }
                 }
             }
-            AddInstruction(index, instruction) => {
+            AddInstruction(body_path, index, instruction) => {
                 if let Some(mac) = &mut self.current_macro {
-                    mac.code.insert(index, instruction);
+                    self.key_capture_path = None;
+                    self.dragging_instruction_path = None;
+                    self.drag_drop_target = None;
+                    let _ = insert_instruction_at_path(&mut mac.code, &body_path, index, instruction);
                     self.auto_save_current_macro();
                 }
             }
-            EditInstruction(index, instruction) => {
+            EditInstruction(path, instruction) => {
                 if let Some(mac) = &mut self.current_macro {
-                    if mac.code.len() > 0 {
-                        mac.code[index] = instruction;
+                    if replace_instruction_at_path(&mut mac.code, &path, instruction) {
                         self.auto_save_current_macro();
                     }
                 }
             }
-            StartKeyCapture(index) => {
-                self.key_capture_index = Some(index);
+            StartKeyCapture(path) => {
+                self.key_capture_path = Some(path);
             }
             KeyCaptureEvent(event) => {
                 if let keyboard::Event::KeyPressed { key, .. } = event {
-                    let Some(index) = self.key_capture_index else {
+                    let Some(path) = self.key_capture_path.clone() else {
                         return Task::none();
                     };
 
                     if let Some(mac) = &mut self.current_macro {
-                        if let Some(Instruction::Token(Token::Key(_, direction))) =
-                            mac.code.get(index).cloned()
-                        {
+                        if let Some(Instruction::Token(Token::Key(_, direction))) = get_instruction(&mac.code, &path).cloned() {
                             if let Some(captured_key) = map_iced_key_to_enigo_key(key.as_ref()) {
-                                mac.code[index] = Instruction::Token(Token::Key(captured_key, direction));
+                                let _ = replace_instruction_at_path(
+                                    &mut mac.code,
+                                    &path,
+                                    Instruction::Token(Token::Key(captured_key, direction)),
+                                );
                                 self.auto_save_current_macro();
                             }
                         }
                     }
 
                     // Stop listening after the first observed key press.
-                    self.key_capture_index = None;
+                    self.key_capture_path = None;
                 }
             }
-            RemoveInstruction(index) => {
+            RemoveInstruction(path) => {
                 if let Some(mac) = &mut self.current_macro {
-                    if mac.code.len() > 0 && index >= 0 {
-                        mac.code.remove(index as usize);
+                    self.key_capture_path = None;
+                    self.dragging_instruction_path = None;
+                    self.drag_drop_target = None;
+                    if remove_instruction_at_path(&mut mac.code, &path) {
                         self.auto_save_current_macro();
                     }
                 }
             }
-            ReorderInstruction(index, direction) => {
+            ReorderInstruction(path, direction) => {
                 if let Some(mac) = &mut self.current_macro {
-                    let len = mac.code.len();
-                    if len > 1 && index < len {
-                        let new_index = if direction < 0 {
-                            // Move up (swap with previous)
-                            if index > 0 { index - 1 } else { index }
-                        } else {
-                            // Move down (swap with next)
-                            if index < len - 1 { index + 1 } else { index }
-                        };
-
-                        if new_index != index {
-                            // Swap the instructions
-                            mac.code.swap(index, new_index);
-                            self.auto_save_current_macro();
-                        }
+                    self.key_capture_path = None;
+                    self.dragging_instruction_path = None;
+                    self.drag_drop_target = None;
+                    if reorder_instruction_at_path(&mut mac.code, &path, direction) {
+                        self.auto_save_current_macro();
                     }
                 }
+            }
+            MoveInstructionOut(path) => {
+                if let Some(mac) = &mut self.current_macro {
+                    self.key_capture_path = None;
+                    self.dragging_instruction_path = None;
+                    self.drag_drop_target = None;
+                    if move_instruction_out_of_loop(&mut mac.code, &path) {
+                        self.auto_save_current_macro();
+                    }
+                }
+            }
+            HoverInstruction(path) => {
+                self.hovered_instruction_path = Some(path.clone());
+                if let (Some(source), Some(mac)) = (self.dragging_instruction_path.as_ref(), self.current_macro.as_ref()) {
+                    if can_drop_instruction_on_target(&mac.code, source, &path) {
+                        self.drag_drop_target = Some(DragDropTarget::Instruction(path));
+                    } else if matches!(self.drag_drop_target, Some(DragDropTarget::Instruction(_))) {
+                        self.drag_drop_target = None;
+                    }
+                }
+            }
+            UnhoverInstruction(path) => {
+                if self.hovered_instruction_path.as_ref() == Some(&path) {
+                    self.hovered_instruction_path = None;
+                }
+                if self.drag_drop_target == Some(DragDropTarget::Instruction(path)) {
+                    self.drag_drop_target = None;
+                }
+            }
+            StartInstructionDrag(path) => {
+                self.key_capture_path = None;
+                if let Some(mac) = &self.current_macro
+                    && get_instruction(&mac.code, &path).is_some()
+                {
+                    self.dragging_instruction_path = Some(path);
+                    self.drag_drop_target = None;
+                }
+            }
+            HoverBodyDropEnd(body_path) => {
+                if let (Some(source), Some(mac)) = (self.dragging_instruction_path.as_ref(), self.current_macro.as_ref()) {
+                    if can_drop_instruction_at_end(&mac.code, source, &body_path) {
+                        self.drag_drop_target = Some(DragDropTarget::EndOfBody(body_path));
+                    }
+                }
+            }
+            UnhoverBodyDropEnd(body_path) => {
+                if self.drag_drop_target == Some(DragDropTarget::EndOfBody(body_path)) {
+                    self.drag_drop_target = None;
+                }
+            }
+            DropDraggedInstructionOn(target_path) => {
+                let source = self.dragging_instruction_path.clone();
+                self.dragging_instruction_path = None;
+                self.drag_drop_target = None;
+
+                if let (Some(source), Some(mac)) = (source, &mut self.current_macro)
+                    && drop_instruction_on_target(&mut mac.code, &source, &target_path)
+                {
+                    self.auto_save_current_macro();
+                }
+            }
+            DropDraggedInstructionAtEnd(body_path) => {
+                let source = self.dragging_instruction_path.clone();
+                self.dragging_instruction_path = None;
+                self.drag_drop_target = None;
+
+                if let (Some(source), Some(mac)) = (source, &mut self.current_macro)
+                    && drop_instruction_at_end(&mut mac.code, &source, &body_path)
+                {
+                    self.auto_save_current_macro();
+                }
+            }
+            CancelInstructionDrag => {
+                self.dragging_instruction_path = None;
+                self.drag_drop_target = None;
             }
             ClearInstructions => {
                 if !self.confirm_clear_instructions {
@@ -622,6 +1319,9 @@ impl cosmic::Application for App {
                     );
                 } else if let Some(mac) = &mut self.current_macro {
                     mac.code.clear();
+                    self.key_capture_path = None;
+                    self.dragging_instruction_path = None;
+                    self.drag_drop_target = None;
                     self.auto_save_current_macro();
                     self.confirm_clear_instructions = false;
                 }
@@ -646,6 +1346,9 @@ impl cosmic::Application for App {
                 if let Err(err) = add_macro(&self.config, new_macro) {
                     warn!("Failed to create macro: {}", err);
                 }
+                self.key_capture_path = None;
+                self.dragging_instruction_path = None;
+                self.drag_drop_target = None;
                 self.update_macros();
                 if let Some((index, _)) = config::get_macros_from_config(&self.config)
                     .iter()
@@ -663,6 +1366,9 @@ impl cosmic::Application for App {
                         if let Err(err) = config::remove_macro_by_id(&self.config, &mac.id) {
                             warn!("Failed to remove macro: {}", err);
                         } else {
+                            self.key_capture_path = None;
+                            self.dragging_instruction_path = None;
+                            self.drag_drop_target = None;
                             self.update_macros();
                             self.update_macro(None);
                         }
@@ -851,224 +1557,60 @@ impl cosmic::Application for App {
                 "⚠ Clear instructions"
             };
 
-
-            let mut instructions: Vec<Element<Message>> = vec![];
-
-            for (index, ins) in mac.code.iter().cloned().enumerate() {
-                let instruction: Element<Message> = match ins {
-                    Instruction::Token(token) => {
-                        match token {
-                            Token::Text(text) => {
-                                row![
-                                    widget::text::body("Text:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("", text)
-                                        .on_input(move |x| EditInstruction(index, Instruction::Token(Token::Text(x)))),
-                                ].spacing(10).into()
-                            }
-                            Token::Key(key, direction) => {
-                                let key_label = if self.key_capture_index == Some(index) {
-                                    "Press any key...".to_string()
-                                } else {
-                                    format!("{}", key_to_string(&key).unwrap_or("Unknown"))
-                                };
-
-                                row![
-                                    widget::text::body("Key:".to_string()).align_y(Alignment::Center),
-                                    button(cosmic::widget::text(key_label))
-                                        .on_press(StartKeyCapture(index))
-                                        .width(Length::Fill),
-                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Key(key.clone(), if x == 0usize { Direction::Click } else if x == 1usize { Direction::Press } else { Direction::Release })))),
-                                ].spacing(10).width(Length::Fill).into()
-                            }
-                            Token::Raw(keycode, _) => {
-                                widget::text::body(format!("Raw: {:?}", keycode)).into()
-                            }
-                            Token::Button(button, direction) => {
-                                row![
-                                    widget::text::body("Mouse:".to_string()).align_y(Alignment::Center),
-                                    widget::dropdown(get_mouse_button_names(), Some(mouse_button_to_index(&button)), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(index_to_mouse_button(x), direction.clone())))),
-                                    widget::dropdown(&["Click", "Press", "Release"], Some(if direction == Direction::Click { 0usize } else if direction == Direction::Press { 1usize } else { 2usize }), move |x: usize| EditInstruction(index, Instruction::Token(Token::Button(button, if x == 0 { Direction::Click } else if x == 1 { Direction::Press } else { Direction::Release })))),
-                                ].spacing(10).width(Length::Fill).into()
-                                //widget::text::body(format!("Mouse: {:?}", button)).into()
-                            }
-                            Token::MoveMouse(x, y, coordinate) => {
-                                row![
-                                    widget::text::body("Move mouse:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("X", format!("{}", x))
-                                        .on_input(move |new_x| EditInstruction(index, Instruction::Token(Token::MoveMouse(new_x.parse().unwrap_or(x), y, coordinate.clone())))),
-                                    widget::text_input("Y", format!("{}", y))
-                                        .on_input(move |new_y| EditInstruction(index, Instruction::Token(Token::MoveMouse(x, new_y.parse().unwrap_or(y), coordinate.clone())))),
-                                    widget::dropdown(&["Absolute", "Relative"], Some(if coordinate == Coordinate::Abs { 0usize } else { 1usize }), move |coord: usize| EditInstruction(index, Instruction::Token(Token::MoveMouse(x, y, if coord == 0 { Coordinate::Abs } else { Coordinate::Rel })))),
-                                ].spacing(10).into()
-                            }
-                            Token::Scroll(amount, axis) => {
-                                row![
-                                    widget::text::body("Scroll:".to_string()).align_y(Alignment::Center),
-                                    widget::text_input("Amount", format!("{}", amount))
-                                        .on_input(move |new_amount| EditInstruction(index, Instruction::Token(Token::Scroll(new_amount.parse().unwrap_or(amount), axis.clone())))),
-                                    widget::dropdown(&["Vertical", "Horizontal"], Some(if axis == Axis::Vertical { 0 } else { 1 }), move |new_axis: usize| EditInstruction(index, Instruction::Token(Token::Scroll(amount, if new_axis == 0 { Axis::Vertical } else { Axis::Horizontal })))),
-                                ].spacing(10).into()
-                            }
-                            _ => {
-                                widget::text::body("Token not implemented").into()
-                            }
-                        }
-                    }
-                    Instruction::Wait(duration) => {
-                        row![
-                            widget::text::body("Wait (ms):".to_string()).align_y(Alignment::Center),
-                            widget::text_input("", duration.to_string())
-                                .on_input(move |x| EditInstruction(index, Instruction::Wait(x.parse().unwrap_or(duration)))),
-                        ].spacing(10).into()
-                        //widget::text::body(format!("Wait: {}ms", duration)).into()
-                    }
-                    Instruction::Script(script) => {
-                        row![
-                            widget::text::body("Script:".to_string()).align_y(Alignment::Center),
-                            widget::text_input("", script)
-                                .on_input(move |x| EditInstruction(index, Instruction::Script(x))),
-                        ].spacing(10).into()
-                        //widget::text::body(format!("Script: {}", script)).into()
-                    }
-                };
-                let instruction = row![
-                    instruction,
-                    container(
-                        row![
-                            // Up button
-                            tooltip(
-                                compact_icon_button(ICON_UP)
-                                    .on_press(ReorderInstruction(index, -1)),
-                                container("Move up"),
-                                tooltip::Position::Top
-                            ),
-                            // Down button
-                            tooltip(
-                                compact_icon_button(ICON_DOWN)
-                                    .on_press(ReorderInstruction(index, 1)),
-                                container("Move down"),
-                                tooltip::Position::Bottom
-                            ),
-                            tooltip(
-                                compact_icon_button(ICON_REMOVE)
-                                    .on_press(RemoveInstruction(index as isize)),
-                                container("Remove instruction"),
-                                tooltip::Position::Left
-                            ),
-                            cosmic::widget::dropdown(
-                                &[
-                                    "Wait",
-                                    "Text",
-                                    "Key",
-                                    "Mouse Button",
-                                    "Move Mouse",
-                                    "Scroll",
-                                    "Run Script",
-                                ],
-                                None,
-                                move |selected| match selected {
-                                    0 => AddInstruction(index, Instruction::Wait(DEFAULT_WAIT_TIME)),
-                                    1 => AddInstruction(index, Instruction::Token(Token::Text("text".into()))),
-                                    2 => AddInstruction(index, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Click))),
-                                    3 => AddInstruction(index, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
-                                    4 => AddInstruction(index, Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
-                                    5 => AddInstruction(index, Instruction::Token(Token::Scroll(DEFAULT_SCROLL_AMOUNT, Axis::Vertical))),
-                                    6 => AddInstruction(index, Instruction::Script("script".into())),
-                                    _ => unreachable!(),
-                                },
-                            )
-                        ]
-                        .spacing(spacing.space_xs)
-                        .align_y(Alignment::Center)
-                    )
-                    .width(Length::Fill)
-                    .align_x(Alignment::Center)
-                ]
-                .spacing(spacing.space_xs)
-                .width(Length::Fill)
-                .into();
-
-                instructions.push(instruction);
-            }
-
-            let len = mac.code.len();
-            instructions.push(
-                cosmic::widget::dropdown(
-                    &[
-                        "Wait",
-                        "Text",
-                        "Key",
-                        "Mouse Button",
-                        "Move Mouse",
-                        "Scroll",
-                        "Run Script",
-                    ],
-                    None,
-                    move |selected| match selected {
-                        0 => AddInstruction(len, Instruction::Wait(DEFAULT_WAIT_TIME)),
-                        1 => AddInstruction(len, Instruction::Token(Token::Text("text".into()))),
-                        2 => AddInstruction(len, Instruction::Token(Token::Key(Key::Unicode('a'.into()), Direction::Click))),
-                        3 => AddInstruction(len, Instruction::Token(Token::Button(Button::Left, Direction::Click))),
-                        4 => AddInstruction(len, Instruction::Token(Token::MoveMouse(0, 0, Coordinate::Rel))),
-                        5 => AddInstruction(len, Instruction::Token(Token::Scroll(DEFAULT_SCROLL_AMOUNT, Axis::Vertical))),
-                        6 => AddInstruction(len, Instruction::Script("script".into())),
-                        _ => unreachable!(),
-                    },
-                ).into()
-            );
+            let instructions = render_instruction_list(self, &mac.code, vec![]);
 
             content = content.push(widget::settings::view_column(
                 vec![
-                widget::settings::section()
-                    .add(
-                        widget::column::with_children(vec![
-                            widget::text::body("Title").into(),
-                            widget::text_input("Macro", &mac.name)
-                                .on_input(SetTitle)
-                                .into()
-                        ])
+                    widget::settings::section()
+                        .add(
+                            widget::column::with_children(vec![
+                                widget::text::body("Title").into(),
+                                widget::text_input("Macro", &mac.name)
+                                    .on_input(SetTitle)
+                                    .into(),
+                            ])
                             .spacing(spacing.space_xxs)
                             .padding([0, 15, 0, 15]),
-                    )
-                    .add(
-                        widget::column::with_children(vec![
-                            widget::text::body("Instructions").into(),
-                            //widget::text_input("Description", &mac.description).into(),
-                            widget::column::with_children(instructions).spacing(spacing.space_xs).into(),
-                            container(
-                                row![
-                                    tooltip(
-                                        pill_button(clear_instructions_label).on_press(ClearInstructions),
-                                        container(if self.confirm_clear_instructions {
-                                            "Click again within 5 seconds to remove every instruction in this macro"
-                                        } else {
-                                            "Arms removal for every instruction in this macro"
-                                        }),
-                                        tooltip::Position::Top
-                                    ),
-                                    tooltip(
-                                        pill_button("💾 Save macro").on_press(SaveMacro),
-                                        container("Persist the current macro to your config"),
-                                        tooltip::Position::Top
-                                    ),
-                                ]
-                                .spacing(12)
-                                .align_y(Alignment::Center)
-                            )
-                            .width(Length::Fill)
-                            .align_x(Alignment::Center)
-                            .into()
-                        ])
+                        )
+                        .add(
+                            widget::column::with_children(vec![
+                                widget::text::body("Instructions").into(),
+                                instructions,
+                                container(
+                                    row![
+                                        tooltip(
+                                            pill_button(clear_instructions_label).on_press(ClearInstructions),
+                                            container(if self.confirm_clear_instructions {
+                                                "Click again within 5 seconds to remove every instruction in this macro"
+                                            } else {
+                                                "Arms removal for every instruction in this macro"
+                                            }),
+                                            tooltip::Position::Top,
+                                        ),
+                                        tooltip(
+                                            pill_button("💾 Save macro").on_press(SaveMacro),
+                                            container("Persist the current macro to your config"),
+                                            tooltip::Position::Top,
+                                        ),
+                                    ]
+                                    .spacing(12)
+                                    .align_y(Alignment::Center),
+                                )
+                                .width(Length::Fill)
+                                .align_x(Alignment::Center)
+                                .into(),
+                            ])
                             .spacing(spacing.space_xxs)
                             .padding([0, 15, 0, 15])
                             .apply(scrollable),
-                    )
-                    .into(),
-            ])
-                .padding(10))
-                .width(Length::Fill)
-                .height(Length::Shrink)
-                .align_x(Alignment::Center);
+                        )
+                        .into(),
+                ],
+            )
+            .padding(10))
+            .width(Length::Fill)
+            .height(Length::Shrink)
+            .align_x(Alignment::Center);
         }
 
         // Centers all the content and makes it look nice

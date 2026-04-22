@@ -36,5 +36,9 @@ impl Macro {
 pub(crate) enum Instruction {
     Token(Token),
     Wait(u64),
-    Script(String)
+    Script(String),
+    Loop {
+        count: u32,
+        body: Vec<Instruction>,
+    },
 }
