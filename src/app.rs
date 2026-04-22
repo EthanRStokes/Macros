@@ -214,6 +214,7 @@ fn map_iced_key_to_enigo_key(key: keyboard::Key<&str>) -> Option<Key> {
             Named::PageDown => Some(Key::PageDown),
             Named::CapsLock => Some(Key::CapsLock),
             Named::NumLock => Some(Key::Numlock),
+            #[cfg(all(unix, not(target_os = "macos")))]
             Named::ScrollLock => Some(Key::ScrollLock),
             Named::F1 => Some(Key::F1),
             Named::F2 => Some(Key::F2),
